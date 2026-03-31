@@ -1,10 +1,12 @@
-const CACHE = 'crazymoe-scanner-v4';
+const CACHE = 'crazymoe-scanner-v6';
 const ASSETS = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
   '/icon-192.png',
-  '/icon-512.png'
+  '/icon-512.png',
+  '/screenshot-wide.png',
+  '/screenshot-mobile.png'
 ];
 
 self.addEventListener('install', e => {
@@ -36,4 +38,15 @@ self.addEventListener('fetch', e => {
   e.respondWith(
     caches.match(e.request).then(cached => cached || fetch(e.request).catch(() => {}))
   );
+});
+
+// Background sync — nudges the app to retry any queued items when back online
+self.addEventListener('sync', e => {
+  if (e.tag === 'crazymoe-bulk') {
+    e.waitUntil(
+      self.clients.matchAll().then(clients =>
+        clients.forEach(c => c.postMessage({type:'SYNC_BULK'}))
+      )
+    );
+  }
 });

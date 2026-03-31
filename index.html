@@ -4,6 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
 <meta name="theme-color" content="#f97316"/>
+<meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <meta name="apple-mobile-web-app-title" content="CM Scanner"/>
@@ -245,6 +246,8 @@ video{display:block;width:100%;max-height:48vh;object-fit:cover}
 </head>
 <body>
 <div class="app">
+
+<div id="offlineBanner" class="hidden" style="position:fixed;top:calc(10px + var(--safe-top));left:50%;transform:translateX(-50%);background:#ef4444;color:#fff;padding:8px 16px;border-radius:999px;font-size:.8rem;font-weight:700;z-index:999;box-shadow:0 4px 20px rgba(239,68,68,.4);">⚠️ Offline — changes saved locally</div>
 <div id="kbToast" class="kb-toast"></div>
 
 <div class="install-bar hidden" id="installBar">
@@ -276,6 +279,7 @@ video{display:block;width:100%;max-height:48vh;object-fit:cover}
       <div class="field-grid">
         <input class="field" id="cfgUrl" placeholder="Supabase Project URL"/>
         <input class="field" id="cfgKey" placeholder="Supabase anon key" type="password"/>
+        <div style="font-size:.71rem;color:var(--warn);margin-top:4px">⚠️ Use anon key only — never paste a service-role key. Key is kept in memory only (not saved to disk).</div>
         <input class="field" id="cfgTable" placeholder="Table name" value="active_listings"/>
         <input class="field" id="cfgBucket" placeholder="Storage bucket" value="listing-photos"/>
         <input class="field" id="cfgFolder" placeholder="Storage folder" value="scanner-intake"/>
@@ -307,6 +311,7 @@ video{display:block;width:100%;max-height:48vh;object-fit:cover}
 
     <div class="btn-row">
       <button class="btn primary" id="btnSaveSetup">✓ Save & Go to Scanner</button>
+      <button class="btn ghost" id="btnTestSetup" style="margin-left:6px">🔌 Test Connection</button>
     </div>
     <div class="status" id="stSetup"></div>
   </div>
@@ -367,6 +372,7 @@ video{display:block;width:100%;max-height:48vh;object-fit:cover}
       <button class="btn primary" id="btnLookup">Look Up</button>
     </div>
     <div id="dupWarning" class="dup-warn hidden"></div>
+    <div id="recentUPCBar" style="display:flex;gap:6px;overflow-x:auto;padding:6px 0 2px;scrollbar-width:none"></div>
     <div class="status" id="stIdentify"></div>
     <div style="font-size:.7rem;color:var(--dim);margin-top:6px">⌨️ Enter = lookup · Space = capture · Esc = back · N = new item</div>
   </div>
@@ -438,6 +444,8 @@ video{display:block;width:100%;max-height:48vh;object-fit:cover}
       <button class="btn ghost" id="btnBackToDetails">← Details</button>
       <button class="btn amber" id="btnSaveDraft">Save Draft</button>
       <button class="btn ok" id="btnSaveSupabase">💾 Save</button>
+      <button class="btn ok" id="btnSaveAndNew">💾 Save & New</button>
+      <button class="btn ghost" id="btnResumeLastItem">↻ Resume Last</button>
       <button class="btn fb" id="btnLaunchFBSingle">📘 Post to FB</button>
     </div>
     <div class="btn-row">
@@ -489,6 +497,7 @@ video{display:block;width:100%;max-height:48vh;object-fit:cover}
       <span id="bulkProgLabel">0 / 0</span><span id="bulkProgPct">0%</span>
     </div>
     <div class="status" id="stBulkProg"></div>
+    <div id="bulkETA" style="font-size:.74rem;color:var(--muted);margin-top:3px"></div>
   </div>
 
   <div class="stats-row hidden" id="bulkStatsRow">
@@ -657,6 +666,7 @@ video{display:block;width:100%;max-height:48vh;object-fit:cover}
 </div><!-- /app -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
 <script>
 'use strict';
 const LSKEY='crazymoe_v5', LSKEY_B='crazymoe_bulk_v2', LSKEY_OFFLINE='crazymoe_offline_q';
@@ -677,10 +687,20 @@ let B={queue:[],processing:false,pause:false,editId:null,filter:'all',
 
 function setStatus(id,msg,k=''){const el=$(id);if(!el)return;el.className='status'+(k?' '+k:'');el.textContent=msg||'';}
 function isUPC(v){return /^\d{8,14}$/.test(String(v||'').trim());}
+// Offline banner
+function updateOfflineBanner(){const b=$('offlineBanner');if(b)b.classList.toggle('hidden',navigator.onLine);}
+window.addEventListener('online',updateOfflineBanner);
+window.addEventListener('offline',updateOfflineBanner);
 function applyDisc(p){const n=parseFloat(p);if(!isFinite(n)||n<=0)return '';const d=parseFloat(S.settings.discount);return(isFinite(d)&&d>0)?(n*(1-d/100)).toFixed(2):n.toFixed(2);}
 
 // PERSIST
-function persist(){try{localStorage.setItem(LSKEY,JSON.stringify({settings:S.settings,draft:S.draft,drafts:S.drafts,savedItems:S.savedItems,offlineQueue:S.offlineQueue}));}catch(e){}}
+function persist(){
+  try{
+    // Intentionally exclude settings.key — never persist API keys to localStorage
+    const {key:_omit,...safeSettings}=S.settings;
+    localStorage.setItem(LSKEY,JSON.stringify({settings:safeSettings,draft:S.draft,drafts:S.drafts,savedItems:S.savedItems,offlineQueue:S.offlineQueue}));
+  }catch(e){}
+}
 function persistB(){try{localStorage.setItem(LSKEY_B,JSON.stringify({queue:B.queue.map(x=>({...x,photos:[]}))}));}catch(e){}}
 function hydrate(){
   try{const d=JSON.parse(localStorage.getItem(LSKEY)||'{}');
@@ -729,6 +749,14 @@ function showPage(pg){
 
 
 // STEP FLOW
+// Auto-draft timer — saves every 45s while on step 4 with a title filled
+let autoDraftTimer=null;
+function startAutoDraftTimer(){
+  if(autoDraftTimer)clearInterval(autoDraftTimer);
+  autoDraftTimer=setInterval(()=>{if(S.step===4&&$('fTitle')?.value?.trim())saveDraft();},45000);
+}
+function stopAutoDraftTimer(){if(autoDraftTimer){clearInterval(autoDraftTimer);autoDraftTimer=null;}}
+
 function setStep(n){
   S.step=n;
   document.querySelectorAll('.stepbar-item').forEach(el=>{const sn=+el.dataset.step;el.className='stepbar-item'+(sn===n?' active':sn<n?' done':'');});
@@ -736,7 +764,8 @@ function setStep(n){
   window.scrollTo({top:0,behavior:'smooth'});
   if(n===3){renderPhotos();startCam();}
   if(n!==3)stopCam();
-  if(n===4)hydrateDetails();
+  if(n===4){hydrateDetails();startAutoDraftTimer();}
+  if(n!==4)stopAutoDraftTimer();
   if(n===5){syncDetails();renderReview();}
 }
 
@@ -756,14 +785,29 @@ async function stopLiveScan(){
 // ─── BARCODE VALIDATION ─────────────────────────────────────────
 // Only accept numeric-only codes or known alphanumeric formats (Code128, etc.)
 // Reject anything that looks like it came from a shipping label's address/text
+// UPC/EAN/GTIN check-digit validation — single loop handles all lengths 8-14
+function checkDigitOK(code){
+  const c=String(code||'').trim();
+  if(!/^\d{8,14}$/.test(c))return false;
+  let sum=0,odd=true;
+  for(let i=c.length-2;i>=0;i--){
+    const d=Number(c[i]);
+    sum+=odd?d*3:d; odd=!odd;
+  }
+  return((10-(sum%10))%10)===Number(c[c.length-1]);
+}
 function isValidProductCode(code){
   if(!code||typeof code!=='string')return false;
   const c=code.trim();
-  // Pure digit UPC/EAN/GTIN (8–14 digits)
-  if(/^\d{8,14}$/.test(c))return true;
-  // Standard product model: letters+digits, max 25 chars, no spaces
-  if(/^[A-Z0-9][A-Z0-9\-\/]{3,24}$/i.test(c)&&/\d/.test(c))return true;
-  // Reject anything with spaces or very long strings (likely scanned text/address)
+  // Pure digit UPC/EAN — run check-digit math for standard lengths
+  if(/^\d{8,14}$/.test(c)){
+    if([8,12,13,14].includes(c.length))return checkDigitOK(c);
+    return true;
+  }
+  // Model numbers: 7+ chars, 3+ digits minimum
+  if(/^[A-Z0-9][A-Z0-9\-\/]{5,24}$/i.test(c)){
+    if((c.match(/\d/g)||[]).length>=3)return true;
+  }
   return false;
 }
 
@@ -805,10 +849,21 @@ async function scanFileForBarcode(file){
       const detected=await bd.detect(bitmap);
       bitmap.close();
       if(detected.length){
-        // Find best product code — prefer UPC/EAN length codes
-        const sorted=detected.map(d=>d.rawValue).filter(isValidProductCode)
-          .sort((a,b)=>{const ua=/^\d{12,13}$/.test(a),ub=/^\d{12,13}$/.test(b);return ua===ub?0:ua?-1:1;});
-        if(sorted.length)return sorted[0];
+        // Rank by: UPC format first, then largest box closest to center
+        const bw=bitmap.width||1, bh=bitmap.height||1, cx=bw/2, cy=bh/2;
+        const ranked=detected.map(d=>{
+          const v=String(d.rawValue||'').trim();
+          const box=d.boundingBox||{x:bw*0.25,y:bh*0.25,width:bw*0.5,height:bh*0.5};
+          const area=(box.width||0)*(box.height||0);
+          const dx=((box.x||0)+(box.width||0)/2)-cx, dy=((box.y||0)+(box.height||0)/2)-cy;
+          const dist=Math.sqrt(dx*dx+dy*dy);
+          const isUpc=/^\d{12,13}$/.test(v);
+          return {v, valid:isValidProductCode(v), isUpc, area, dist};
+        }).filter(x=>x.valid).sort((a,b)=>{
+          if(a.isUpc!==b.isUpc) return a.isUpc?-1:1;
+          return (b.area-(b.dist*0.85))-(a.area-(a.dist*0.85));
+        });
+        if(ranked.length) return ranked[0].v;
       }
     }catch(_){}
   }
@@ -874,6 +929,99 @@ function extractBestIdentifier(raw){
   if(anyDigits.length){ anyDigits.sort((a,b)=>b.length-a.length); return anyDigits[0]; }
   return '';
 }
+// Crop center region where barcode sticker usually appears, then high-contrast grayscale
+function cropBarcodeRegion(file){
+  return new Promise((resolve)=>{
+    const img=new Image();const url=URL.createObjectURL(file);
+    img.onload=()=>{
+      URL.revokeObjectURL(url);
+      const sw=img.naturalWidth,sh=img.naturalHeight;
+      const c=document.createElement('canvas');
+      c.width=Math.max(600,Math.round(sw*0.72));
+      c.height=Math.max(260,Math.round(sh*0.52));
+      const ctx=c.getContext('2d');
+      const sx=Math.round(sw*0.14),sy=Math.round(sh*0.34),sWidth=Math.round(sw*0.72),sHeight=Math.round(sh*0.56);
+      ctx.drawImage(img,sx,sy,sWidth,sHeight,0,0,c.width,c.height);
+      const id=ctx.getImageData(0,0,c.width,c.height),d=id.data;
+      for(let i=0;i<d.length;i+=4){
+        let g=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+        g=Math.min(255,Math.max(0,((g-128)*2.9)+128));
+        d[i]=d[i+1]=d[i+2]=g;
+      }
+      ctx.putImageData(id,0,0);
+      c.toBlob(b=>resolve(b),'image/png');
+    };
+    img.onerror=()=>{URL.revokeObjectURL(url);resolve(null);};
+    img.src=url;
+  });
+}
+// Digits-only OCR on the cropped barcode region — much higher UPC accuracy
+async function ocrBarcodeDigitsFromImage(file){
+  if(!window.Tesseract)return '';
+  try{
+    const blob=await cropBarcodeRegion(file);if(!blob)return '';
+    const out=await Tesseract.recognize(new File([blob],'barcode-ocr.png',{type:'image/png'}),'eng',{
+      logger:()=>{},tessedit_char_whitelist:'0123456789',preserve_interword_spaces:'1'});
+    const raw=String(out?.data?.text||'').replace(/\s+/g,'');
+    const matches=[...raw.matchAll(/\d{8,14}/g)].map(m=>m[0]).filter(isValidProductCode).sort((a,b)=>b.length-a.length);
+    return matches[0]||'';
+  }catch(_){return '';}
+}
+
+// Crops just the bottom digit line under the barcode stripes, fixes O/l/I misreads
+async function ocrBarcodeLineFromImage(file){
+  if(!window.Tesseract)return '';
+  try{
+    const blob=await cropBarcodeRegion(file);if(!blob)return '';
+    const img=new Image();
+    const dataUrl=await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result);r.readAsDataURL(blob);});
+    await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=dataUrl;});
+    const c=document.createElement('canvas');
+    c.width=img.width;c.height=Math.max(80,Math.round(img.height*0.24));
+    const ctx=c.getContext('2d');
+    const sy=Math.round(img.height*0.70);
+    ctx.drawImage(img,0,sy,img.width,img.height-sy,0,0,c.width,c.height);
+    const id=ctx.getImageData(0,0,c.width,c.height),d=id.data;
+    for(let i=0;i<d.length;i+=4){
+      let g=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+      g=Math.min(255,Math.max(0,((g-128)*3.2)+128));
+      d[i]=d[i+1]=d[i+2]=g;
+    }
+    ctx.putImageData(id,0,0);
+    const out=await Tesseract.recognize(c,'eng',{logger:()=>{},
+      tessedit_char_whitelist:'0123456789OolI| ',preserve_interword_spaces:'1'});
+    const raw=String(out?.data?.text||'').replace(/[Oo]/g,'0').replace(/[Il|]/g,'1').replace(/\s+/g,'');
+    const matches=[...raw.matchAll(/\d{8,14}/g)].map(m=>m[0]).filter(isValidProductCode).sort((a,b)=>b.length-a.length);
+    return matches[0]||'';
+  }catch(_){return '';}
+}
+
+// Converts a stored dataUrl or blob URL to a File object for re-processing
+async function dataUrlToFile(dataUrl,name='identifier.png'){
+  const res=await fetch(dataUrl);const blob=await res.blob();
+  return new File([blob],name,{type:blob.type||'image/png'});
+}
+
+// On-open rescue: tries all extraction methods on stored image when item still has no query
+async function improveManualItemPrefill(item){
+  if(!item||item.query)return item?.query||'';
+  try{
+    if(item.ocrText){
+      const ex=extractBestIdentifier(item.ocrText);
+      if(ex){item.query=ex;return ex;}
+    }
+    if(item.identifierImage&&/^(data:|blob:|https?:)/.test(item.identifierImage)){
+      const f=await dataUrlToFile(item.identifierImage,'identifier.png');
+      let code=await ocrBarcodeDigitsFromImage(f);
+      if(!code)code=await ocrBarcodeLineFromImage(f);
+      if(!code){const ocr=await ocrIdentifierFromImage(f);code=ocr.query||'';if(ocr.raw&&!item.ocrText)item.ocrText=ocr.raw;}
+      if(!code){const vis=await claudeVisionReadUPC(f);code=vis.query||'';}
+      if(code){item.query=code;item.hint=code;return code;}
+    }
+  }catch(_){}
+  return item?.query||'';
+}
+
 async function ocrIdentifierFromImage(file){
   if(!window.Tesseract) return {query:'', raw:''};
   try{
@@ -886,14 +1034,122 @@ async function ocrIdentifierFromImage(file){
     ]);
     const rawOrig=origOut.status==='fulfilled'?origOut.value?.data?.text||'':'';
     const rawEnh=enhOut.status==='fulfilled'&&enhOut.value?enhOut.value?.data?.text||'':'';
-    // Pick the result that yields a longer/better identifier
     const qOrig=extractBestIdentifier(rawOrig);
     const qEnh=extractBestIdentifier(rawEnh);
-    // Prefer longer digit sequence (more likely to be complete UPC)
     const query=qEnh.length>qOrig.length ? qEnh : (qOrig||qEnh);
     const raw=rawEnh.length>rawOrig.length ? rawEnh : rawOrig;
     return {query, raw};
   }catch(e){ return {query:'', raw:''}; }
+}
+
+// Claude Vision API — reads barcode/UPC directly from image when all else fails
+async function claudeVisionReadUPC(file){
+  try{
+    // Convert file to base64
+    const base64=await new Promise((res,rej)=>{
+      const r=new FileReader();
+      r.onload=()=>res(r.result.split(',')[1]);
+      r.onerror=rej;
+      r.readAsDataURL(file);
+    });
+    const mt=file.type||'image/jpeg';
+    // Route through our Netlify function — keeps API key server-side, adds auth headers
+    const resp=await fetch('/.netlify/functions/vision-ocr',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({image:base64,mediaType:mt})
+    });
+    if(!resp.ok)return {query:'',raw:''};
+    const data=await resp.json();
+    if(data.error||!data.query)return {query:data.query||'',raw:data.raw||''};
+    return {query:data.query,raw:data.raw||''};
+  }catch(e){return {query:'',raw:''};}
+}
+
+// ═══ RECENT UPCs ═══
+function renderRecentUPCs(){
+  const bar=$('recentUPCBar');if(!bar)return;
+  const recent=(S.recentUPCs||[]).slice(0,8);
+  if(!recent.length){bar.innerHTML='';return;}
+  bar.innerHTML=recent.map(u=>`<div class="chip" style="cursor:pointer;white-space:nowrap;flex-shrink:0" onclick="$('lookupText').value=${JSON.stringify(u)};runLookup(${JSON.stringify(u)})">${esc(u)}</div>`).join('');
+}
+
+// ═══ SAVE & NEW ═══
+// ═══ RESUME LAST ITEM ═══
+function resumeLastItem(){
+  const last=S.savedItems?.[0]||S.drafts?.[0];
+  if(last){loadDraft({...last});setStatus('stSave','✓ Resumed last item','ok');navigator.vibrate?.([30,20,30]);}
+  else setStatus('stSave','No previous item to resume','warn');
+}
+
+// ═══ VOICE DICTATION ═══
+let voiceRec=null;
+function startVoiceDictation(fieldId,stId){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR)return setStatus(stId||'stDetails','Voice not supported on this browser','warn');
+  if(voiceRec){voiceRec.stop();voiceRec=null;return;}
+  voiceRec=new SR();
+  voiceRec.lang='en-US';voiceRec.interimResults=false;voiceRec.maxAlternatives=1;
+  voiceRec.onresult=e=>{
+    const txt=e.results[0][0].transcript;
+    const field=$(fieldId);if(field){field.value=(field.value?field.value+' ':'')+txt;field.dispatchEvent(new Event('input'));}
+    setStatus(stId||'stDetails',`🎤 "${txt.slice(0,40)}${txt.length>40?'…':''}"`, 'ok');
+    navigator.vibrate?.([20]);voiceRec=null;
+  };
+  voiceRec.onerror=e=>{setStatus(stId||'stDetails','Voice error: '+e.error,'warn');voiceRec=null;};
+  voiceRec.onend=()=>{voiceRec=null;};
+  voiceRec.start();
+  setStatus(stId||'stDetails','🎤 Listening… speak the title or description','ok');
+}
+
+async function saveAndNew(){
+  syncDetails();
+  if(!$('fTitle')?.value?.trim())return setStatus('stSave','Title required','warn');
+  await saveToSupabase();
+  // Only reset if save succeeded (stSave will show error otherwise)
+  if($('stSave')?.className?.includes('ok'))resetFlow();
+}
+
+// ═══ BLUR DETECTION ═══
+function isPhotoBlurry(dataUrl){
+  return new Promise(resolve=>{
+    const img=new Image();
+    img.onload=()=>{
+      const c=document.createElement('canvas');c.width=80;c.height=80;
+      const ctx=c.getContext('2d');ctx.drawImage(img,0,0,80,80);
+      const d=ctx.getImageData(0,0,80,80).data;
+      // Laplacian variance — proper sharpness metric
+      let sum=0,sum2=0,n=0;
+      for(let y=1;y<79;y++) for(let x=1;x<79;x++){
+        const i=(y*80+x)*4;
+        const lap=4*d[i]
+          -d[(y*80+(x-1))*4]
+          -d[(y*80+(x+1))*4]
+          -d[((y-1)*80+x)*4]
+          -d[((y+1)*80+x)*4];
+        sum+=lap;sum2+=lap*lap;n++;
+      }
+      const variance=(sum2-(sum*sum/n))/n;
+      resolve(variance<80); // <80 = blurry in warehouse lighting
+    };
+    img.onerror=()=>resolve(false);
+    img.src=dataUrl;
+  });
+}
+
+// ═══ BULK ETA ═══
+let bulkStartTime=0;
+function updateBulkETA(){
+  const eta=$('bulkETA');if(!eta)return;
+  if(!B.processing||!bulkStartTime){eta.textContent='';return;}
+  const done=B.queue.filter(x=>['found','ready','posted','no-match'].includes(x.status)).length;
+  if(done<2){eta.textContent='';return;}
+  const elapsed=(Date.now()-bulkStartTime)/1000;
+  const avgPerItem=elapsed/done;
+  const remaining=B.queue.filter(x=>x.status==='queued'||x.status==='processing').length;
+  if(!remaining){eta.textContent='';return;}
+  const mins=Math.ceil(remaining*avgPerItem/60);
+  eta.textContent=mins<=1?'< 1 min remaining':`~${mins} min remaining`;
 }
 
 // LOOKUP
@@ -906,7 +1162,9 @@ async function runLookup(raw){
   S.lookupQuery=q;stopLiveScan();setStep(2);$('resultsList').innerHTML='';
   let dot=0,mi=0;const msgs=['Checking UPC databases','Querying open sources','Web fallbacks','Ranking'];
   const t=setInterval(()=>{dot=(dot+1)%4;setStatus('stResults',msgs[mi]+'.'.repeat(dot+1));if(dot===3)mi=Math.min(mi+1,msgs.length-1);},600);
-  try{const d=await doLookup(q);clearInterval(t);S.results=d.results||[];renderResults(d);}
+  try{const d=await doLookup(q);clearInterval(t);S.results=d.results||[];
+    if(S.results.length){S.recentUPCs=[q,...(S.recentUPCs||[]).filter(x=>x!==q)].slice(0,20);persist();renderRecentUPCs();}
+    renderResults(d);}
   catch(e){clearInterval(t);S.results=[];renderNoResults({message:e.message,checked:[]});
     setStatus('stResults',e.message?.includes('404')?'404 — deploy via GitHub+Netlify, not drag-drop':e.message||'Lookup failed','err');}
 }
@@ -1042,7 +1300,9 @@ function compressDataUrl(dataUrl,maxPx=1200,quality=0.88){
       }
       const c=document.createElement('canvas');c.width=width;c.height=height;
       c.getContext('2d').drawImage(img,0,0,width,height);
-      res(c.toDataURL('image/jpeg',quality));
+      // WebP is 20-30% smaller than JPEG at same quality
+      const webp=c.toDataURL('image/webp',quality);
+      res(webp.startsWith('data:image/webp')?webp:c.toDataURL('image/jpeg',quality));
     };
     img.src=dataUrl;
   });
@@ -1066,6 +1326,10 @@ function renderPhotos(gid='photosGrid',arr=S.photos,fid='inputPhotoFile'){
   arr.forEach((src,i)=>{
     const t=document.createElement('div');t.className='photo-tile';t.draggable=true;t.dataset.i=i;
     t.innerHTML=`<img src="${src}" alt=""/><button class="del-btn">×</button><span class="idx-label">${i+1}</span>`;
+    // Async blur check — adds warning badge if photo is too blurry
+    isPhotoBlurry(src).then(blurry=>{
+      if(blurry&&t.isConnected){const w=document.createElement('div');w.style='position:absolute;bottom:20px;left:4px;background:#f59e0b;color:#000;font-size:9px;font-weight:700;padding:1px 5px;border-radius:999px';w.textContent='⚠ BLURRY';t.appendChild(w);}
+    });
     t.querySelector('.del-btn').addEventListener('click',e=>{e.stopPropagation();arr.splice(i,1);renderPhotos(gid,arr,fid);});
     t.addEventListener('dragstart',e=>e.dataTransfer.setData('text/plain',String(i)));
     t.addEventListener('dragover',e=>e.preventDefault());
@@ -1122,6 +1386,41 @@ function resetFlow(){
   setStep(1);setStatus('stIdentify','');window.scrollTo({top:0});
 }
 
+// SUPABASE SETUP VALIDATOR
+async function testSupabaseSetup(){
+  readSettings();
+  const{url,key,table,bucket}=S.settings;
+  setStatus('stSetup','Testing connection…');
+  if(!url||!key){return setStatus('stSetup','⚠️ Enter URL and key first','warn');}
+  if(!url.startsWith('https://')){return setStatus('stSetup','⚠️ URL must start with https://','warn');}
+  // Warn if key looks like service role (much longer than anon key)
+  if(key.length>500){setStatus('stSetup','⚠️ This looks like a service-role key — use anon key only for security','warn');return;}
+  const base=url.replace(/\/$/,'');
+  const steps=[];
+  try{
+    // Test 1: DB read permission
+    const r=await fetch(`${base}/rest/v1/${encodeURIComponent(table||'active_listings')}?limit=1`,{
+      headers:{apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json'}});
+    if(r.status===404)steps.push('⚠️ Table not found — check table name');
+    else if(r.status===401||r.status===403)steps.push('❌ DB access denied — check key/RLS');
+    else if(r.ok)steps.push('✓ Database readable');
+    else steps.push(`⚠️ DB returned ${r.status}`);
+  }catch(e){steps.push('❌ DB unreachable: '+e.message);}
+  try{
+    // Test 2: Storage bucket read
+    const r2=await fetch(`${base}/storage/v1/bucket`,{
+      headers:{apikey:key,Authorization:`Bearer ${key}`}});
+    if(r2.ok){
+      const buckets=await r2.json();
+      const bname=bucket||'listing-photos';
+      const found=Array.isArray(buckets)&&buckets.some(b=>b.name===bname);
+      steps.push(found?`✓ Bucket "${bname}" found`:`⚠️ Bucket "${bname}" not found — check bucket name`);
+    }else steps.push(`⚠️ Storage check: ${r2.status}`);
+  }catch(e){steps.push('⚠️ Storage unreachable');}
+  const allOk=steps.every(s=>s.startsWith('✓'));
+  setStatus('stSetup',steps.join(' · '),allOk?'ok':'warn');
+}
+
 // SUPABASE
 async function uploadPhoto(dataUrl,idx){
   const{url,key,bucket,folder}=S.settings;
@@ -1152,12 +1451,15 @@ async function saveToSupabase(){
   try{
     setStatus('stSave','Saving…');
     const p=await saveItemSupa(S.selected,S.photos,'stSave');
-    const saved={...p,photos:S.photos.slice(0,1),savedAt:new Date().toISOString(),type:'saved'};
+    const saved={...p,coverPhoto:S.photos[0]||'',photos:[...S.photos],savedAt:new Date().toISOString(),type:'saved'};
     S.savedItems=[saved,...S.savedItems].slice(0,60);
     S.drafts=S.drafts.filter(d=>d.lookupQuery!==S.lookupQuery);
     persist();updateStatsBar();
     setStatus('stSave','✓ Saved to Supabase!','ok');
     $('newItemBar').classList.remove('hidden');
+    // Celebrate the save
+    try{window.confetti?.({particleCount:120,spread:65,origin:{y:0.6}});}catch(_){}
+    navigator.vibrate?.([50,30,50,30,100]);
   }catch(e){
     // If Supabase failed, offer offline save
     setStatus('stSave',`${e.message||'Save failed'} — tap Save Offline to queue locally`,'err');
@@ -1184,7 +1486,7 @@ async function syncOfflineQueue(){
   for(const item of [...S.offlineQueue]){
     try{
       const p=await saveItemSupa(item.data,item.photos,'stSave');
-      const saved={...p,photos:item.photos.slice(0,1),savedAt:new Date().toISOString(),type:'saved'};
+      const saved={...p,coverPhoto:item.photos[0]||'',photos:[...item.photos],savedAt:new Date().toISOString(),type:'saved'};
       S.savedItems=[saved,...S.savedItems].slice(0,60);
       synced++;
     }catch(e){failed.push(item);}
@@ -1197,12 +1499,12 @@ async function syncOfflineQueue(){
 function updateStatsBar(){
   const queueCount=B.queue.filter(x=>x.status!=='posted').length;
   const today=new Date().toLocaleDateString();
-  const postedToday=S.savedItems.filter(x=>x.savedAt&&new Date(x.savedAt).toLocaleDateString()===today).length
-    +B.queue.filter(x=>x.status==='posted'&&x.postedAt&&new Date(x.postedAt).toLocaleDateString()===today).length;
+  const savedToday=S.savedItems.filter(x=>x.savedAt&&new Date(x.savedAt).toLocaleDateString()===today).length
+    +B.queue.filter(x=>(x.status==='saved'||x.status==='launched')&&(x.savedAt||x.launchedAt)&&new Date(x.savedAt||x.launchedAt).toLocaleDateString()===today).length;
   const draftCount=S.drafts.length+(S.draft?1:0);
   const savedCount=S.savedItems.length;
   $('svQueue')&&($('svQueue').textContent=queueCount);
-  $('svToday')&&($('svToday').textContent=postedToday);
+  $('svToday')&&($('svToday').textContent=savedToday);
   $('svDrafts')&&($('svDrafts').textContent=draftCount);
   $('svSaved')&&($('svSaved').textContent=savedCount);
   updateSyncBadge();
@@ -1342,12 +1644,26 @@ async function processBulkIdentifierFiles(fileList){
     if(code){
       autoFound++;kind='barcode-photo';
     } else {
-      // Step 2: OCR fallback
-      setStatus('stBulkProg',`Trying OCR on ${i+1}/${files.length}\u2026`);
-      const ocr=await ocrIdentifierFromImage(f);
-      code=ocr.query||'';ocrText=ocr.raw||'';
-      if(code){ ocrFound++;kind='ocr-photo'; }
-      else{ manual++;kind='sticker-photo'; }
+      // Step 2: Focused barcode-region digit OCR (crops center, digits-only whitelist)
+      setStatus('stBulkProg',`Focused barcode OCR ${i+1}/${files.length}\u2026`);
+      code=await ocrBarcodeDigitsFromImage(f);
+      if(!code) code=await ocrBarcodeLineFromImage(f);  // also try digit-line crop
+      if(code){ ocrFound++;kind='barcode-ocr'; }
+      else {
+        // Step 3: General Tesseract OCR (catches model numbers too)
+        setStatus('stBulkProg',`General OCR ${i+1}/${files.length}\u2026`);
+        const ocr=await ocrIdentifierFromImage(f);
+        code=ocr.query||'';ocrText=ocr.raw||'';
+        if(code){ ocrFound++;kind='ocr-photo'; }
+        else {
+          // Step 4: Claude Vision API — most reliable for real warehouse photos
+          setStatus('stBulkProg',`Asking Claude Vision ${i+1}/${files.length}\u2026`);
+          const vis=await claudeVisionReadUPC(f);
+          code=vis.query||'';ocrText=vis.raw||'';
+          if(code){ ocrFound++;kind='vision-photo'; }
+          else{ manual++;kind='sticker-photo'; }
+        }
+      }
     }
     // Update placeholder in-place — visible in queue in real time
     item.query=code||'';
@@ -1375,20 +1691,7 @@ function initBulkQueue(){
 
 async function startBulkProcessing(){
   if(B.processing)return;
-  B.processing=true;B.pause=false;
-  $('bulkProgressCard').classList.remove('hidden');$('bulkStatsRow').classList.remove('hidden');$('bulkActionsBar').classList.remove('hidden');$('bulkImportCard').classList.add('hidden');
-  $('btnBulkResume').classList.add('hidden');$('btnBulkPause').textContent='⏸ Pause';
-  let errs=0;
-  for(let i=0;i<B.queue.length;i++){
-    if(B.pause){B.processing=false;setStatus('stBulkProg','Paused — tap Resume to continue','warn');renderBulkList();return;}
-    const item=B.queue[i];if(item.status!=='queued')continue;
-    item.status='processing';renderBulkList();updateStats();setStatus('stBulkProg',`Looking up: ${item.query||'item '+(i+1)}`);updateProgress();
-    try{
-      const d=await doLookup(item.query);item.results=d.results||[];
-      item.status=item.results.length?'found':'no-match';
-async function startBulkProcessing(){
-  if(B.processing)return;
-  B.processing=true;B.pause=false;
+  B.processing=true;B.pause=false;bulkStartTime=Date.now();
   $('bulkProgressCard').classList.remove('hidden');$('bulkStatsRow').classList.remove('hidden');$('bulkActionsBar').classList.remove('hidden');$('bulkImportCard').classList.add('hidden');
   $('btnBulkResume').classList.add('hidden');$('btnBulkPause').textContent='\u23f8 Pause';
   let errs=0;
@@ -1408,17 +1711,33 @@ async function startBulkProcessing(){
         const q=String(item.query||'').trim();
         const upcMatches=isUPC(q)?item.results.filter(r=>String(r.upc||'').replace(/-/g,'')===q.replace(/-/g,'')):[];
         const pool=upcMatches.length?upcMatches:item.results;
-        // Among pool, prefer upcitemdb/openfoodfacts (more complete titles) over eBay RSS
+        // Among pool, rank by source quality + title completeness
         const ranked=[...pool].sort((a,b)=>{
-          // Source score: upcitemdb > openfacts > google > ebay > other
-          const srcScore=s=>/upcitem/i.test(s||'')?4:/open.?food|open.?product|open.?beauty/i.test(s||'')?3:/google/i.test(s||'')?2:/ebay/i.test(s||'')?1:0;
-          const sd=srcScore(b.source)-srcScore(a.source);
-          if(sd!==0)return sd;
-          // Among same source, prefer longer title
-          return(b.title||'').length-(a.title||'').length;
+          // bestbuy has the most complete titles for retail products — treat same as upcitemdb
+          const srcBase=s=>{
+            if(/upcitem/i.test(s||''))return 4;
+            if(/bestbuy/i.test(s||''))return 4;
+            if(/open.?food|open.?product|open.?beauty/i.test(s||''))return 3;
+            if(/google/i.test(s||''))return 2;
+            if(/ebay/i.test(s||''))return 1;
+            return 0;
+          };
+          const tA=a.title||'',tB=b.title||'';
+          // Brand bonus: title that starts with a capitalized brand name and is long = more complete
+          const brandA=/^[A-Z][a-z]/.test(tA)&&tA.length>25?1:0;
+          const brandB=/^[A-Z][a-z]/.test(tB)&&tB.length>25?1:0;
+          // Penalize very short titles (incomplete product names)
+          const shortPenA=tA.length<25?1:0;
+          const shortPenB=tB.length<25?1:0;
+          const effA=srcBase(a.source)+brandA-shortPenA;
+          const effB=srcBase(b.source)+brandB-shortPenB;
+          if(effB!==effA)return effB-effA;
+          // Tiebreak: longer title wins
+          return tB.length-tA.length;
         });
         const b=ranked[0];
-        item.selected={
+        // Store as 'suggested' — user must tap Choose to confirm. Item stays 'found', not 'ready'.
+        item.suggested={
           title:b.title||item.query,
           price:applyDisc(b.price||''),
           condition:'Used \u2013 Good',
@@ -1431,15 +1750,15 @@ async function startBulkProcessing(){
           chips:b.chips||[],
           sourceUrl:b.sourceUrl||''
         };
-        item.details={...item.selected};
-        if(item.status==='found') item.status='ready';
+        item.details={...item.suggested};
+        // Do NOT set item.selected or promote to ready — user confirms in the editor
       }
       errs=0;
     }catch(e){
       item.status='no-match';item.error=e.message;errs++;
       if(errs>=5){B.processing=false;setStatus('stBulkProg','Auto-paused \u2014 5 consecutive errors. Check connection.','err');renderBulkList();updateStats();persistB();return;}
     }
-    item.processedAt=new Date().toISOString();renderBulkList();updateStats();persistB();updateProgress();
+    item.processedAt=new Date().toISOString();renderBulkList();updateStats();persistB();updateProgress();updateBulkETA();
     await sleep(820);
   }
   B.processing=false;
@@ -1448,8 +1767,6 @@ async function startBulkProcessing(){
   const mn=B.queue.filter(x=>x.status==='manual').length;
   setStatus('stBulkProg',`Done! ${f} found \u00b7 ${nm} no match \u00b7 ${mn} need manual entry`,'ok');
   updateProgress();updateStatsBar();
-}
-  updateFloat();
 }
 function updateProgress(){
   const tot=B.queue.filter(x=>x.status!=='scanning').length;
@@ -1464,7 +1781,7 @@ function updateProgress(){
 }
 function updateStats(){
   const q=B.queue;
-  const counts={found:0,'no-match':0,manual:0,ready:0,posted:0};
+  const counts={found:0,'no-match':0,manual:0,ready:0,saved:0,launched:0,posted:0};
   q.forEach(x=>{if(counts[x.status]!==undefined)counts[x.status]++;});
   const all=$('spAll');if(all)all.textContent=`All ${q.length}`;
   const sf=$('spFound');if(sf)sf.textContent=`Found ${counts.found}`;
@@ -1476,7 +1793,8 @@ function updateStats(){
 function setFilter(f){B.filter=f;document.querySelectorAll('.stat-pill').forEach(p=>p.classList.toggle('active',p.dataset.bf===f));renderBulkList();}
 function filtered(){return B.filter==='all'?B.queue:B.queue.filter(x=>x.status===B.filter);}
 function statusLabel(s){return{queued:'⏳ Queued',processing:'🔄 Looking up',found:'⚡ Found',
-  'no-match':'❌ No match',manual:'📝 Manual needed',ready:'✅ Ready',posted:'📘 Posted'}[s]||s;}
+  'no-match':'❌ No match',manual:'📝 Manual needed',ready:'✅ Ready',
+  saved:'💾 Saved',launched:'📤 Launched to FB',posted:'📘 Posted'}[s]||s;}
 
 function renderBulkList(){
   const list=$('bulkList'),items=filtered();
@@ -1484,22 +1802,26 @@ function renderBulkList(){
   list.innerHTML='';
   items.forEach(item=>{
     const div=document.createElement('div');div.className='bulk-item'+(B.sel.has(item.id)?' sel-item':'');div.dataset.id=item.id;
-    const thumbSrc=item.selected?.thumbnail||item.labelThumb||'';
+    const thumbSrc=item.selected?.thumbnail||item.suggested?.thumbnail||item.labelThumb||'';
     const th=thumbSrc?`<img class="bi-thumb" src="${esc(thumbSrc)}" alt="" onerror="this.outerHTML='<div class=\\'bi-thumb\\'>📦</div>'">`:`<div class="bi-thumb">📦</div>`;
-    const title=item.selected?.title||item.query||'Identifier photo';
-    const meta=item.status==='found'?`${item.results.length} match${item.results.length!==1?'es':''}`:item.status==='no-match'?(item.error||'Not found'):item.status==='manual'?'📝 Tap to enter UPC/model manually':item.query||'Queued';
+    const title=item.selected?.title||item.suggested?.title||item.query||'Identifier photo';
+    const meta=item.status==='found'
+      ?`${item.results.length} match${item.results.length!==1?'es':''}${item.query?` · ${item.query}`:''}`
+      :item.status==='no-match'?((item.query?`${item.query} · `:'')+( item.error||'Not found'))
+      :item.status==='manual'?((item.query?`${item.query} · `:'')+'\u{1F4DD} Tap to enter UPC/model manually')
+      :item.query||'Queued';
     const canEdit=item.status==='found'||item.status==='no-match'||item.status==='ready'||item.status==='manual';
     div.innerHTML=`<div class="bi-check${B.sel.has(item.id)?' on':''}" data-chk="${item.id}"></div>${th}
       <div class="bi-info"><div class="bi-title">${esc(title)}</div>
         <div class="bi-meta">${esc(meta)}${item.photos.length?` · ${item.photos.length} photo${item.photos.length!==1?'s':''}`:''}</div>
         <div style="margin-top:3px"><span class="sbadge ${item.status}">${statusLabel(item.status)}</span></div>
       </div>
-      <div class="bi-actions">${canEdit?`<button class="btn xs primary editbtn" data-id="${item.id}">Edit</button>`:''}${item.status==='ready'?`<button class="btn xs fb fbbtn" data-id="${item.id}">FB</button>`:''}${item.status==='no-match'&&item.query?`<button class="btn xs ghost" data-retry="${item.id}" title="Retry">&#8635;</button>`:''}</div>`;
+      <div class="bi-actions">${canEdit?`<button class="btn xs primary editbtn" data-id="${item.id}">${item.status==='found'?'Choose':'Edit'}</button>`:''}${(item.status==='ready'||item.status==='saved')?`<button class="btn xs fb fbbtn" data-id="${item.id}">FB</button>`:''}${(item.status==='no-match'||item.status==='manual')&&(item.query||item.identifierImage)?`<button class="btn xs ghost" data-retry="${item.id}" title="Retry">&#8635;</button>`:''}</div>`;
     list.appendChild(div);
   });
   list.querySelectorAll('[data-chk]').forEach(el=>el.addEventListener('click',e=>{e.stopPropagation();const id=el.dataset.chk;if(B.sel.has(id))B.sel.delete(id);else B.sel.add(id);updateFloat();renderBulkList();}));
   list.querySelectorAll('.editbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();openBulkEditor(b.dataset.id);}));
-  list.querySelectorAll('.fbbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const item=B.queue.find(x=>x.id===b.dataset.id);if(item){launchToFB(item.selected,item.photos,null);item.status='posted';item.postedAt=new Date().toISOString();persistB();renderBulkList();updateStats();}}));
+  list.querySelectorAll('.fbbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const item=B.queue.find(x=>x.id===b.dataset.id);if(item){launchToFB(item.selected,item.photos,null);item.status='launched';item.launchedAt=new Date().toISOString();persistB();renderBulkList();updateStats();}}));
   list.querySelectorAll('.bulk-item').forEach(row=>row.addEventListener('click',e=>{if(e.target.closest('[data-chk]')||e.target.closest('button'))return;const item=B.queue.find(x=>x.id===row.dataset.id);if(item&&(item.status==='found'||item.status==='no-match'||item.status==='ready'||item.status==='manual'))openBulkEditor(row.dataset.id);}));
 }
 function updateFloat(){const n=B.sel.size;$('bulkFloat').classList.toggle('on',n>0);$('bulkFloatCnt').textContent=`${n} selected`;}
@@ -1516,7 +1838,7 @@ function launchNextFB(){
   const item=B.queue.find(x=>x.id===B.fbQ[B.fbQIdx]);
   if(!item){B.fbQIdx++;launchNextFB();return;}
   launchToFB(item.selected,item.photos,null);
-  item.status='posted';item.postedAt=new Date().toISOString();B.fbQIdx++;
+  item.status='launched';item.launchedAt=new Date().toISOString();B.fbQIdx++;
   persistB();renderBulkList();updateStats();
   const rem=B.fbQ.length-B.fbQIdx;
   if(rem>0)setStatus('stBulkImport',`Launched! ${rem} more — tap "Launch Selected" again for next.`,'ok');
@@ -1529,14 +1851,26 @@ async function bulkSaveReady(){
   setStatus('stBulkImport',`Saving ${ready.length} items…`);let saved=0;
   for(const item of ready){
     try{const p=await saveItemSupa(item.selected||item.details,item.photos,'stBulkImport');
-      S.savedItems=[{...p,photos:item.photos.slice(0,1),savedAt:new Date().toISOString(),type:'saved'},...S.savedItems].slice(0,60);
-      item.status='posted';item.postedAt=new Date().toISOString();saved++;
+      S.savedItems=[{...p,coverPhoto:item.photos[0]||'',photos:[...item.photos],savedAt:new Date().toISOString(),type:'saved'},...S.savedItems].slice(0,60);
+      item.status='saved';item.savedAt=item.savedAt||new Date().toISOString();saved++;
     }catch(e){setStatus('stBulkImport',`Error: ${e.message}`,'err');break;}
   }
   persist();persistB();renderBulkList();updateStats();setStatus('stBulkImport',`✓ ${saved} item${saved!==1?'s':''} saved`,'ok');
 }
 
 // BULK EDITOR
+
+function pauseBulkProcessing(){
+  B.pause=!B.pause;
+  const btn=$('btnBulkPause');
+  if(btn) btn.textContent=B.pause?'▶ Resume':'⏸ Pause';
+  if(!B.pause && B.queue.some(x=>x.status==='processing')){
+    B.queue.filter(x=>x.status==='processing').forEach(x=>x.status='queued');
+    startBulkProcessing();
+  }
+  persistB();
+}
+
 function openBulkEditor(id){B.editId=id;showPage('bulkEditor');setBeTab('match');renderBeItem();}
 function getItem(){return B.queue.find(x=>x.id===B.editId)||null;}
 
@@ -1573,8 +1907,15 @@ async function runBulkManualLookup(){
   }catch(e){setStatus('stBeMatch',e.message||'Lookup failed','err');}
 }
 
-function renderBeItem(){
+async function renderBeItem(){
   const item=getItem();if(!item)return;
+  // On-open rescue: if manual item with no query but has an image, try all extraction methods
+  if(item.status==='manual'&&!item.query&&item.identifierImage){
+    setStatus('stBeMatch','Trying to extract identifier from photo…');
+    await improveManualItemPrefill(item);
+    persistB();
+    setStatus('stBeMatch','');
+  }
   renderLabelPreview(item);
   const idx=B.queue.indexOf(item);
   $('beTitleTxt').textContent=`${idx+1}/${B.queue.length}: ${item.query||'identifier photo'}`;
@@ -1917,7 +2258,12 @@ window.addEventListener('DOMContentLoaded',()=>{
   // Show setup on first run
   const hasSetup=S.settings.url&&S.settings.key;
   setStep(1);renderPhotos();
-  showPage(hasSetup?'scanner':'setup');
+  // Handle PWA shortcut actions (?action=scan/bulk/dash)
+  const urlAction=new URLSearchParams(location.search).get('action');
+  if(urlAction==='bulk')showPage('bulk');
+  else if(urlAction==='dash')showPage('dash');
+  else if(urlAction==='scan'){showPage('scanner');setTimeout(startLiveScan,400);}
+  else showPage(hasSetup?'scanner':'setup');
 
   $('installBtn').addEventListener('click',async()=>{if(!iEvt)return;iEvt.prompt();const{outcome}=await iEvt.userChoice;if(outcome==='accepted')$('installBar').classList.add('hidden');});
   $('installClose').addEventListener('click',()=>$('installBar').classList.add('hidden'));
@@ -1930,6 +2276,7 @@ window.addEventListener('DOMContentLoaded',()=>{
 
   // Setup page
   $('btnSaveSetup').addEventListener('click',()=>{readSettings();setStatus('stSetup','✓ Settings saved!','ok');setTimeout(()=>showPage('scanner'),800);});
+  $('btnTestSetup').addEventListener('click',testSupabaseSetup);
 
   // Stats bar — clicking navigates
   $('statQueue').addEventListener('click',()=>showPage('bulk'));
@@ -1944,7 +2291,34 @@ window.addEventListener('DOMContentLoaded',()=>{
   $('lookupText').addEventListener('keydown',e=>{if(e.key==='Enter')runLookup($('lookupText').value);});
   $('lookupText').addEventListener('input',()=>checkDuplicate($('lookupText').value));
   $('btnUploadBarcode').addEventListener('click',()=>$('inputBarcode').click());
-  $('inputBarcode').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;setStatus('stIdentify','Reading barcode…');const code=await scanFileForBarcode(f);e.target.value='';if(code){$('lookupText').value=code;setStatus('stIdentify',`Detected: ${code}`,'ok');checkDuplicate(code);runLookup(code);}else setStatus('stIdentify','No barcode found — type the UPC manually','warn');});
+  $('inputBarcode').addEventListener('change',async e=>{
+    const f=e.target.files[0];if(!f)return;e.target.value='';
+    setStatus('stIdentify','Reading barcode…');
+    let code=await scanFileForBarcode(f);
+    if(code){
+      $('lookupText').value=code;setStatus('stIdentify',`Detected: ${code}`,'ok');
+      navigator.vibrate?.([40,20,40]);
+      checkDuplicate(code);runLookup(code);
+    } else {
+      setStatus('stIdentify','Trying OCR…');
+      const ocr=await ocrIdentifierFromImage(f);
+      code=ocr.query||'';
+      if(code){
+        $('lookupText').value=code;setStatus('stIdentify',`OCR detected: ${code}`,'ok');
+        checkDuplicate(code);runLookup(code);
+      } else {
+        setStatus('stIdentify','Asking Claude Vision…');
+        const vis=await claudeVisionReadUPC(f);
+        code=vis.query||'';
+        if(code){
+          $('lookupText').value=code;setStatus('stIdentify',`Vision detected: ${code}`,'ok');
+          checkDuplicate(code);runLookup(code);
+        } else {
+          setStatus('stIdentify','Could not read barcode — type the UPC manually','warn');
+        }
+      }
+    }
+  });
   $('btnUploadProduct').addEventListener('click',()=>$('inputProduct').click());
   $('inputProduct').addEventListener('change',e=>{[...e.target.files].slice(0,10-S.photos.length).forEach(f=>{const r=new FileReader();r.onload=()=>{S.photos.push(r.result);renderPhotos();};r.readAsDataURL(f);});e.target.value='';if(e.target.files.length)setStep(3);});
   $('btnBackToIdentify').addEventListener('click',()=>setStep(1));
@@ -1968,6 +2342,8 @@ window.addEventListener('DOMContentLoaded',()=>{
   $('btnBackToDetails').addEventListener('click',()=>setStep(4));
   $('btnSaveDraft').addEventListener('click',saveDraft);
   $('btnSaveSupabase').addEventListener('click',saveToSupabase);
+  $('btnSaveAndNew').addEventListener('click',saveAndNew);
+  $('btnResumeLastItem').addEventListener('click',resumeLastItem);
   $('btnLaunchFBSingle').addEventListener('click',()=>{syncDetails();launchToFB(S.selected,S.photos,'stSave');});
   $('btnResetFlow').addEventListener('click',resetFlow);
   $('btnNewItem').addEventListener('click',resetFlow);
@@ -2005,9 +2381,9 @@ window.addEventListener('DOMContentLoaded',()=>{
   $('btnBeSaveDetails').addEventListener('click',saveBeDetails);
   $('btnBeScrapeDetails').addEventListener('click',()=>runScrape($('beScrapeUrlDetails').value,'beScrapeAreaDetails','stBeScrapeDetails',(result)=>{const item=getItem();if(!item)return;if(result.title&&!$('beTitle').value)$('beTitle').value=result.title;if(result.price&&!$('bePrice').value)$('bePrice').value=result.price;if(result.description&&!$('beDescription').value)$('beDescription').value=result.description;if(result.source&&!$('beSource').value)$('beSource').value=result.source;if(!item.selected)item.selected={};item.selected.sourceUrl=result.sourceUrl||'';renderBeDetails();setStatus('stBeScrapeDetails','✓ Fields filled — review and tap Save Details','ok');}));
   $('beScrapeUrlDetails').addEventListener('keydown',e=>{if(e.key==='Enter')$('btnBeScrapeDetails').click();});
-  $('btnBeLaunchFB').addEventListener('click',()=>{const item=getItem();if(!item)return;saveBeDetails();launchToFB(item.selected||item.details,item.photos,'stBeLaunch');item.status='posted';item.postedAt=new Date().toISOString();persistB();updateStats();updateStatsBar();});
+  $('btnBeLaunchFB').addEventListener('click',()=>{const item=getItem();if(!item)return;saveBeDetails();launchToFB(item.selected||item.details,item.photos,'stBeLaunch');item.status='launched';item.launchedAt=new Date().toISOString();persistB();updateStats();updateStatsBar();});
   $('btnBeCopyText').addEventListener('click',()=>{const item=getItem();if(!item)return;copyText(buildListingText(item.selected||item.details),'stBeLaunch');});
-  $('btnBeSaveSupa').addEventListener('click',async()=>{const item=getItem();if(!item)return;saveBeDetails();readSettings();if(!S.settings.url||!S.settings.key)return setStatus('stBeSave','Supabase not configured — tap ⚙️','err');try{const p=await saveItemSupa(item.selected||item.details,item.photos,'stBeSave');S.savedItems=[{...p,photos:item.photos.slice(0,1),savedAt:new Date().toISOString(),type:'saved'},...S.savedItems].slice(0,60);item.status='posted';item.postedAt=new Date().toISOString();persist();persistB();updateStats();updateStatsBar();setStatus('stBeSave','✓ Saved!','ok');}catch(e){setStatus('stBeSave',e.message||'Save failed','err');}});
+  $('btnBeSaveSupa').addEventListener('click',async()=>{const item=getItem();if(!item)return;saveBeDetails();readSettings();if(!S.settings.url||!S.settings.key)return setStatus('stBeSave','Supabase not configured — tap ⚙️','err');try{const p=await saveItemSupa(item.selected||item.details,item.photos,'stBeSave');S.savedItems=[{...p,coverPhoto:item.photos[0]||'',photos:[...item.photos],savedAt:new Date().toISOString(),type:'saved'},...S.savedItems].slice(0,60);item.status='saved';item.savedAt=new Date().toISOString();persist();persistB();updateStats();updateStatsBar();setStatus('stBeSave','✓ Saved to Supabase!','ok');}catch(e){setStatus('stBeSave',e.message||'Save failed','err');}});
   $('btnBeMarkPosted').addEventListener('click',()=>{const item=getItem();if(!item)return;item.status='posted';item.postedAt=new Date().toISOString();persistB();updateStats();updateStatsBar();setStatus('stBeSave','✓ Marked as posted','ok');});
 
   // Admin page
@@ -2062,7 +2438,23 @@ window.addEventListener('DOMContentLoaded',()=>{
   // Keyboard shortcuts
   initKeyboardShortcuts();
 
-  if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('./sw.js').then(reg=>{
+      // Register background sync when there are queued items
+      function maybeRegisterSync(){
+        if(reg.sync&&(B.queue.some(x=>x.status==='queued')||S.offlineQueue.length)){
+          reg.sync.register('crazymoe-bulk').catch(()=>{});
+        }
+      }
+      maybeRegisterSync();
+      window.addEventListener('online',()=>{ maybeRegisterSync(); syncOfflineQueue(); });
+    }).catch(()=>{});
+  }
+  // Listen for background sync signal from service worker
+  navigator.serviceWorker?.addEventListener('message',e=>{
+    if(e.data?.type==='SYNC_BULK'&&!B.processing&&B.queue.some(x=>x.status==='queued'))
+      startBulkProcessing();
+  });
   if(B.queue.length){$('bulkStatsRow').classList.remove('hidden');$('bulkActionsBar').classList.remove('hidden');renderBulkList();updateStats();}
   updateStatsBar();
   updateSyncBadge();

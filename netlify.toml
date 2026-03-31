@@ -1,6 +1,6 @@
 [build]
   publish = "."
-  command = ""
+  command = "npm test && node scripts/check-csp.mjs && npm run check"
 
 [build.environment]
   NODE_VERSION = "18"
@@ -10,11 +10,24 @@
   node_bundler = "esbuild"
 
 [[headers]]
+  for = "/*.png"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.webmanifest"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"
+
+[[headers]]
   for = "/*"
   [headers.values]
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "no-referrer"
+    Permissions-Policy = "camera=self, microphone=self, geolocation=(), payment=()"
+    Strict-Transport-Security = "max-age=63072000; includeSubDomains; preload"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com https://fonts.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' blob: data: https://*.supabase.co https://*.netlify.app https://api.upcitemdb.com https://world.openfoodfacts.org https://world.openproductsfacts.org https://world.openbeautyfacts.org https://world.openpetfoodfacts.org https://www.barcodelookup.com https://svcs.ebay.com https://www.google.com https://cdn.jsdelivr.net https://unpkg.com; worker-src 'self' blob: data:; child-src 'self' blob: data:; frame-ancestors 'none'"
 
 [[redirects]]
   from = "/lookup"
@@ -24,4 +37,9 @@
 [[redirects]]
   from = "/scrape"
   to = "/.netlify/functions/scrape"
+  status = 200
+
+[[redirects]]
+  from = "/vision-ocr"
+  to = "/.netlify/functions/vision-ocr"
   status = 200

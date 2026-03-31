@@ -5,5 +5,11 @@
   "private": true,
   "engines": {
     "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.cjs tests/*.test.mjs",
+    "check": "node --check netlify/functions/lookup.js netlify/functions/scrape.js netlify/functions/vision-ocr.js",
+    "build": "echo \"Static scanner build OK\"",
+    "ci": "npm test && node scripts/check-csp.mjs && npm run check && npm run build"
   }
 }

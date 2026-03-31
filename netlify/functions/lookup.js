@@ -1,29 +1,37 @@
+const { rankAndDedupe } = require('./lib/lookup-ranking.cjs');
+const { getCors } = require('./lib/cors.cjs');
+const { jsonResponse, methodNotAllowed, optionsResponse } = require('./lib/response.cjs');
+const { isRateLimited, getClientIp } = require('./lib/rate-limit.cjs');
+
 // CrazyMoe Scanner – server-side product lookup
 // Sources: UPCitemDB, Open*Facts family, eBay RSS, Google HTML, optional BarcodeLookup API
 
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-  'Content-Type': 'application/json; charset=utf-8',
-  'Cache-Control': 'no-store'
-};
-
 exports.handler = async function (event) {
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: CORS, body: '' };
-  if (event.httpMethod !== 'POST') return respond({ error: 'POST only' }, 405);
+  const CORS = getCors(event);
+
+  if (isRateLimited(getClientIp(event), 30)) {
+    return jsonResponse({ error: 'Rate limit exceeded' }, 429, CORS);
+  }
+
+  if (event.httpMethod === 'OPTIONS') return optionsResponse(CORS);
+  if (event.httpMethod !== 'POST') return methodNotAllowed(CORS);
+  if ((event.body || '').length > 64_000) {
+    return jsonResponse({ error: 'Request too large' }, 413, CORS);
+  }
 
   try {
     const body = JSON.parse(event.body || '{}');
     const query = String(body.query || '').trim();
-    if (!query) return respond({ results: [], message: 'Empty query', checked: [] });
+    if (!query) {
+      return jsonResponse({ results: [], message: 'Empty query', checked: [] }, 200, CORS);
+    }
 
     const checked = [];
     const isUPC = /^\d{8,14}$/.test(query);
     const all = [];
 
     if (isUPC) {
-      // Parallel exact UPC lookups + Best Buy direct
+      // Exact UPC lookups only.
       const exactResults = await Promise.allSettled([
         upcItemDbLookup(query, checked),
         barcodeLookupApi(query, checked),
@@ -33,82 +41,82 @@ exports.handler = async function (event) {
         openFactsLookup(query, 'beauty', checked),
         openFactsLookup(query, 'petfood', checked),
       ]);
-      exactResults.forEach(r => r.status === 'fulfilled' && r.value && all.push(...r.value));
+
+      exactResults.forEach((r) => {
+        if (r.status === 'fulfilled' && r.value) all.push(...r.value);
+      });
+
+      const queryUpc = String(query).replace(/-/g, '');
+      const exactOnly = all.filter((item) => {
+        const itemUpc = String(item.upc || '').replace(/-/g, '');
+        return itemUpc && itemUpc === queryUpc;
+      });
+
+      const rankedExact = rankAndDedupe(exactOnly, query, true).slice(0, 8);
+      if (rankedExact.length) {
+        return jsonResponse({
+          checked: [...new Set(checked)],
+          results: rankedExact,
+          message: `Found ${rankedExact.length} match${rankedExact.length === 1 ? '' : 'es'}`
+        }, 200, CORS);
+      }
+
+            return jsonResponse({
+        checked: [...new Set(checked)],
+        results: [],
+        message: 'No exact UPC match found'
+      }, 200, CORS);
     }
 
-    // Search-based fallbacks — run Google in parallel instead of sequential last resort
+    // Non-UPC search path
     const searchResults = await Promise.allSettled([
       upcItemDbSearch(query, checked),
       ebayRssSearch(query, checked),
       googleHtmlSearch(query, checked),
     ]);
-    searchResults.forEach(r => r.status === 'fulfilled' && r.value && all.push(...r.value));
 
-    const ranked = rankAndDedupe(all, query, isUPC).slice(0, 8);
-    return respond({
+    searchResults.forEach((r) => {
+      if (r.status === 'fulfilled' && r.value) all.push(...r.value);
+    });
+
+    const ranked = rankAndDedupe(all, query, false).slice(0, 8);
+
+    return jsonResponse({
       checked: [...new Set(checked)],
       results: ranked,
       message: ranked.length ? `Found ${ranked.length} match${ranked.length === 1 ? '' : 'es'}` : 'No matches found'
-    });
+    }, 200, CORS);
   } catch (e) {
-    return respond({ results: [], checked: [], message: e.message || 'Lookup error' }, 500);
+    return jsonResponse({ results: [], checked: [], message: e.message || 'Lookup error' }, 500, CORS);
   }
 };
 
-function respond(obj, status = 200) {
-  return { statusCode: status, headers: CORS, body: JSON.stringify(obj) };
-}
-
-function normTitle(s = '') {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-}
-
-function rankAndDedupe(items, query, upcMode) {
-  const seen = new Map();
-  for (const item of items) {
-    if (!item || !item.title) continue;
-    const key = [item.upc || '', normTitle(item.title).slice(0, 80)].join('|');
-    const scored = scoreItem({ ...item }, query, upcMode);
-    const prev = seen.get(key);
-    if (!prev || scored.confidence > prev.confidence) seen.set(key, scored);
-  }
-  return [...seen.values()].sort((a, b) => b.confidence - a.confidence);
-}
-
-function scoreItem(item, query, upcMode) {
-  let s = Number(item.confidence || 0.3);
-  const q = String(query).toLowerCase();
-  const title = String(item.title || '').toLowerCase();
-  if (upcMode && item.upc && String(item.upc).includes(query)) s += 0.45;
-  if (title.includes(q)) s += 0.22;
-  if (item.source?.includes('upcitemdb')) s += 0.20;
-  if (item.source?.includes('barcodelookup')) s += 0.18;
-  if (item.source?.includes('open')) s += 0.12;
-  if (item.source?.includes('ebay')) s += 0.08;
-  if (item.thumbnail) s += 0.05;
-  item.confidence = Math.min(0.99, Math.max(0, s));
-  return item;
-}
-
 async function safeFetch(url, init = {}, timeoutMs = 8000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; CrazyMoeScanner/2.0)',
-        ...(init.headers || {})
-      }
-    });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    return res;
-  } catch (_) {
-    clearTimeout(timer);
-    return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await fetch(url, {
+        ...init,
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; CrazyMoeScanner/2.0)',
+          ...(init.headers || {})
+        }
+      });
+      clearTimeout(timer);
+      if (res.ok) return res;
+    } catch (_) {
+      clearTimeout(timer);
+    }
+
+    if (attempt === 0) {
+      await new Promise(r => setTimeout(r, 600));
+    }
   }
+
+  return null;
 }
 
 function makeItem(source, data = {}) {
@@ -131,7 +139,9 @@ async function upcItemDbLookup(upc, checked) {
   checked.push('upcitemdb');
   const res = await safeFetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(upc)}`);
   if (!res) return [];
+
   const data = await res.json().catch(() => ({}));
+
   return (data.items || []).map(item => makeItem('upcitemdb', {
     title: item.title || item.product_name || '',
     brand: item.brand || '',
@@ -153,7 +163,9 @@ async function upcItemDbSearch(query, checked) {
   checked.push('upcitemdb-search');
   const res = await safeFetch(`https://api.upcitemdb.com/prod/trial/search?s=${encodeURIComponent(query)}&type=product`);
   if (!res) return [];
+
   const data = await res.json().catch(() => ({}));
+
   return (data.items || []).map(item => makeItem('upcitemdb-search', {
     title: item.title || item.product_name || '',
     brand: item.brand || '',
@@ -174,10 +186,13 @@ async function upcItemDbSearch(query, checked) {
 async function barcodeLookupApi(upc, checked) {
   const key = process.env.BARCODE_LOOKUP_KEY;
   if (!key) return [];
+
   checked.push('barcodelookup');
   const res = await safeFetch(`https://api.barcodelookup.com/v3/products?barcode=${encodeURIComponent(upc)}&formatted=y&key=${key}`);
   if (!res) return [];
+
   const data = await res.json().catch(() => ({}));
+
   return (data.products || []).map(p => makeItem('barcodelookup', {
     title: p.title || p.product_name || '',
     brand: p.brand || '',
@@ -204,16 +219,21 @@ async function openFactsLookup(code, kind, checked) {
     beauty: { host: 'https://world.openbeautyfacts.org', tag: 'openbeautyfacts' },
     petfood: { host: 'https://world.openpetfoodfacts.org', tag: 'openpetfoodfacts' }
   };
+
   const info = map[kind];
   if (!info) return [];
+
   checked.push(info.tag);
   const res = await safeFetch(`${info.host}/api/v2/product/${encodeURIComponent(code)}.json`);
   if (!res) return [];
+
   const data = await res.json().catch(() => ({}));
   if (data.status !== 1 || !data.product) return [];
+
   const p = data.product;
   const title = p.product_name || p.abbreviated_product_name || p.generic_name || '';
   if (!title) return [];
+
   return [makeItem(info.tag, {
     title,
     brand: p.brands || '',
@@ -230,21 +250,23 @@ async function openFactsLookup(code, kind, checked) {
 }
 
 async function bestBuySearch(upc, checked) {
-  // Best Buy has a public search endpoint that returns rich product data by UPC
   checked.push('bestbuy');
+
   const res = await safeFetch(
     `https://www.bestbuy.com/site/searchpage.jsp?st=${encodeURIComponent(upc)}&format=json`,
     { headers: { Accept: 'application/json, text/html', 'User-Agent': 'Mozilla/5.0 (compatible; CrazyMoeScanner/2.0)' } }
   );
   if (!res) return [];
+
   const text = await res.text();
-  // Try to extract product data from the page HTML
   const titleMatch = text.match(/"name"\s*:\s*"([^"]{10,200})"/);
   const priceMatch = text.match(/"currentPrice"\s*:\s*([\d.]+)/);
   const thumbMatch = text.match(/"image"\s*:\s*"(https?:[^"]+)"/);
   const brandMatch = text.match(/"brand"\s*:\s*"([^"]{2,50})"/);
   const modelMatch = text.match(/"modelNumber"\s*:\s*"([^"]{2,30})"/);
+
   if (!titleMatch) return [];
+
   return [makeItem('bestbuy', {
     title: titleMatch[1].replace(/\\u[\da-f]{4}/gi, c => String.fromCharCode(parseInt(c.slice(2), 16))),
     price: priceMatch ? priceMatch[1] : '',
@@ -258,6 +280,7 @@ async function bestBuySearch(upc, checked) {
 
 async function ebayRssSearch(query, checked) {
   checked.push('ebay-rss');
+
   const queries = [
     query,
     query.replace(/[-_]/g, ' ').trim(),
@@ -266,9 +289,11 @@ async function ebayRssSearch(query, checked) {
   for (const q of queries) {
     const res = await safeFetch(`https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(q)}&_rss=1&_ipg=6`);
     if (!res) continue;
+
     const xml = await res.text();
     const blocks = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 6).map(m => m[1]);
     if (!blocks.length) continue;
+
     return blocks.map(block => {
       const title = extractTag(block, 'title');
       const link = extractTag(block, 'link');
@@ -277,6 +302,7 @@ async function ebayRssSearch(query, checked) {
       const priceMatch = title.match(/\$([0-9,.]+)/);
       const price = priceMatch ? priceMatch[1].replace(/,/g, '') : '';
       const cleanTitle = title.replace(/\s*\$[0-9,.]+.*$/, '').trim();
+
       return makeItem('ebay-rss', {
         title: cleanTitle,
         price,
@@ -287,51 +313,50 @@ async function ebayRssSearch(query, checked) {
       });
     }).filter(x => x.title);
   }
+
   return [];
 }
 
 async function googleHtmlSearch(query, checked) {
   checked.push('google-html');
-  const isUPC = /^\d{8,14}$/.test(query);
-  // Plain UPC search returns far better title results than "UPC:xxx product"
-  const searchQ = isUPC ? `${query} product` : query;
-  const res = await safeFetch(
-    `https://www.google.com/search?q=${encodeURIComponent(searchQ)}&hl=en&num=8`,
-    { headers: { Accept: 'text/html', 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' } }
-  );
+
+  const res = await safeFetch(`https://www.google.com/search?q=${encodeURIComponent(query)}&hl=en&num=5`, {
+    headers: {
+      Accept: 'text/html',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36'
+    }
+  });
+
   if (!res) return [];
   const html = await res.text();
-  const results = [];
-  const blocks = [...html.matchAll(/<a href="\/url\?q=([^"&]+)[^>]*>[\s\S]*?<h3[^>]*>([\s\S]*?)<\/h3>/g)].slice(0, 6);
-  for (const m of blocks) {
+
+  const matches = [...html.matchAll(/<a href="\/url\?q=([^"&]+)[^"]*".*?<h3[^>]*>([\s\S]*?)<\/h3>/gi)].slice(0, 5);
+
+  return matches.map(m => {
     const url = decodeURIComponent(m[1]);
-    const title = stripHtml(m[2]).replace(/\s+/g,' ').trim();
-    if (!title || title.length < 5) continue;
-    if (/reddit\.com|facebook\.com|youtube\.com|instagram\.com|twitter\.com/i.test(url)) continue;
-    const snippetIdx = html.indexOf(m[0]);
-    const surrounding = html.slice(Math.max(0, snippetIdx - 300), snippetIdx + 500);
-    const priceMatch = surrounding.match(/\$\s*(\d+(?:\.\d{1,2})?)/);
-    const price = priceMatch ? priceMatch[1] : '';
-    const brandMatch = title.match(/^([A-Z][A-Za-z\u00c0-\u017e\u2122\u00ae™®]+)/);
-    const brand = brandMatch ? brandMatch[1].replace(/[\u2122\u00ae™®]/g,'').trim() : '';
-    results.push(makeItem('google-html', {
-      title, url, price, brand,
-      upc: isUPC ? query : '',
-      confidence: 0.35
-    }));
-  }
-  // Boost first result if Google page references the exact UPC in the snippet
-  if (isUPC && html.includes(query)) {
-    if (results[0]) results[0].confidence = 0.72;
-  }
-  return results.filter(x => x.title);
+    const title = stripHtml(m[2]);
+    return makeItem('google-html', {
+      title,
+      url,
+      confidence: 0.34
+    });
+  }).filter(x => x.title);
 }
 
-function extractTag(block, tag) {
-  const m = block.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'));
-  return m ? stripHtml(m[1]).trim() : '';
+function extractTag(xml, tag) {
+  const m = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+  return m ? stripHtml(m[1]) : '';
 }
 
-function stripHtml(s = '') {
-  return s.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+function stripHtml(input = '') {
+  return String(input)
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
