@@ -2463,3 +2463,19 @@ window.addEventListener('DOMContentLoaded',()=>{
 </body>
 </html>
 
+
+<script>
+function acceptDetectedCode(value){
+  const q = String(value || '').trim();
+  if(!q) return null;
+
+  // Reject obvious garbage like 9142061
+  if(/^\d+$/.test(q) && q.length < 8){
+    console.warn("Rejected partial OCR:", q);
+    return null;
+  }
+
+  return q;
+}
+</script>
+
