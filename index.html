@@ -2293,31 +2293,38 @@ window.addEventListener('DOMContentLoaded',()=>{
   $('btnUploadBarcode').addEventListener('click',()=>$('inputBarcode').click());
   $('inputBarcode').addEventListener('change',async e=>{
     const f=e.target.files[0];if(!f)return;e.target.value='';
+    const goodCode=v=>{
+      if(!v)return false;
+      const s=String(v).trim();
+      if(/^\d+$/.test(s)){
+        if(s.length<8)return false;
+        if([8,12,13,14].includes(s.length)){
+          let sum=0,odd=true;
+          for(let j=s.length-2;j>=0;j--,odd=!odd)sum+=odd?Number(s[j])*3:Number(s[j]);
+          if((10-(sum%10))%10!==Number(s[s.length-1]))return false;
+        }
+        return true;
+      }
+      if(/^[A-Z0-9][A-Z0-9\-\/]{5,24}$/i.test(s)&&(s.match(/\d/g)||[]).length>=3)return true;
+      return false;
+    };
     setStatus('stIdentify','Reading barcode…');
     let code=await scanFileForBarcode(f);
-    if(code){
-      $('lookupText').value=code;setStatus('stIdentify',`Detected: ${code}`,'ok');
-      navigator.vibrate?.([40,20,40]);
-      checkDuplicate(code);runLookup(code);
-    } else {
-      setStatus('stIdentify','Trying OCR…');
-      const ocr=await ocrIdentifierFromImage(f);
-      code=ocr.query||'';
-      if(code){
-        $('lookupText').value=code;setStatus('stIdentify',`OCR detected: ${code}`,'ok');
-        checkDuplicate(code);runLookup(code);
-      } else {
-        setStatus('stIdentify','Asking Claude Vision…');
-        const vis=await claudeVisionReadUPC(f);
-        code=vis.query||'';
-        if(code){
-          $('lookupText').value=code;setStatus('stIdentify',`Vision detected: ${code}`,'ok');
-          checkDuplicate(code);runLookup(code);
-        } else {
-          setStatus('stIdentify','Could not read barcode — type the UPC manually','warn');
-        }
-      }
-    }
+    if(code&&goodCode(code)){$('lookupText').value=code;setStatus('stIdentify',`Detected: ${code}`,'ok');navigator.vibrate?.([40,20,40]);checkDuplicate(code);runLookup(code);return;}
+    setStatus('stIdentify','Trying barcode OCR…');
+    code=await ocrBarcodeDigitsFromImage(f);
+    if(code&&goodCode(code)){$('lookupText').value=code;setStatus('stIdentify',`Barcode OCR: ${code}`,'ok');checkDuplicate(code);runLookup(code);return;}
+    code=await ocrBarcodeLineFromImage(f);
+    if(code&&goodCode(code)){$('lookupText').value=code;setStatus('stIdentify',`Line OCR: ${code}`,'ok');checkDuplicate(code);runLookup(code);return;}
+    setStatus('stIdentify','Trying full image OCR…');
+    try{if(window.Tesseract){const out=await Tesseract.recognize(f,'eng',{logger:()=>{},tessedit_char_whitelist:'0123456789',preserve_interword_spaces:'1'});const raw=String(out?.data?.text||'').replace(/\s+/g,'');const hits=[...raw.matchAll(/\d{8,14}/g)].map(m=>m[0]).filter(goodCode).sort((a,b)=>b.length-a.length);if(hits[0]){$('lookupText').value=hits[0];setStatus('stIdentify',`Full OCR: ${hits[0]}`,'ok');checkDuplicate(hits[0]);runLookup(hits[0]);return;}}}catch(_){}
+    setStatus('stIdentify','Asking Claude Vision…');
+    const vis=await claudeVisionReadUPC(f);
+    code=vis.query||'';
+    if(code&&goodCode(code)){$('lookupText').value=code;setStatus('stIdentify',`Vision: ${code}`,'ok');checkDuplicate(code);runLookup(code);return;}
+    const fallback=vis.query||code||'';
+    if(fallback){$('lookupText').value=fallback;setStatus('stIdentify',`Unverified: ${fallback} — check then press Look Up`,'warn');}
+    else{setStatus('stIdentify','Could not read — type the UPC manually','warn');}
   });
   $('btnUploadProduct').addEventListener('click',()=>$('inputProduct').click());
   $('inputProduct').addEventListener('change',e=>{[...e.target.files].slice(0,10-S.photos.length).forEach(f=>{const r=new FileReader();r.onload=()=>{S.photos.push(r.result);renderPhotos();};r.readAsDataURL(f);});e.target.value='';if(e.target.files.length)setStep(3);});
