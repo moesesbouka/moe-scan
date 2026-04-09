@@ -810,6 +810,14 @@ function isValidProductCode(code){
   }
   return false;
 }
+function acceptDetectedCode(value){
+  const raw=String(value||'').trim();
+  if(!raw)return '';
+  if(isValidProductCode(raw))return raw;
+  const digits=raw.replace(/\D/g,'');
+  if(digits&&isValidProductCode(digits))return digits;
+  return '';
+}
 
 // ─── IMAGE PREPROCESSING ────────────────────────────────────────
 async function preprocessForScan(file, opts={}){
@@ -1045,19 +1053,31 @@ async function ocrIdentifierFromImage(file){
 // Claude Vision API — reads barcode/UPC directly from image when all else fails
 async function claudeVisionReadUPC(file){
   try{
-    // Convert file to base64
+    // Resize to max 1000px — phone photos are 8MB+ which exceeds the 2MB server limit
+    const resized=await new Promise(res=>{
+      const img=new Image();const url=URL.createObjectURL(file);
+      img.onload=()=>{
+        URL.revokeObjectURL(url);
+        const maxPx=1000;
+        const sc=Math.min(1,maxPx/Math.max(img.naturalWidth||maxPx,img.naturalHeight||maxPx));
+        const cv=document.createElement('canvas');
+        cv.width=Math.round(img.naturalWidth*sc);cv.height=Math.round(img.naturalHeight*sc);
+        cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+        cv.toBlob(b=>res(b),'image/jpeg',0.85);
+      };
+      img.onerror=()=>{URL.revokeObjectURL(url);res(file);};
+      img.src=url;
+    });
     const base64=await new Promise((res,rej)=>{
       const r=new FileReader();
       r.onload=()=>res(r.result.split(',')[1]);
       r.onerror=rej;
-      r.readAsDataURL(file);
+      r.readAsDataURL(resized);
     });
-    const mt=file.type||'image/jpeg';
-    // Route through our Netlify function — keeps API key server-side, adds auth headers
     const resp=await fetch('/.netlify/functions/vision-ocr',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({image:base64,mediaType:mt})
+      body:JSON.stringify({image:base64,mediaType:'image/jpeg'})
     });
     if(!resp.ok)return {query:'',raw:''};
     const data=await resp.json();
@@ -1639,27 +1659,27 @@ async function processBulkIdentifierFiles(fileList){
     const f=files[i];const item=placeholders[i];
     setStatus('stBulkProg',`Scanning ${i+1}/${files.length}: ${f.name||'image'}\u2026`);
     // Step 1: Multi-pass barcode scan
-    let code=await scanFileForBarcode(f);
+    let code=acceptDetectedCode(await scanFileForBarcode(f));
     let kind='barcode-photo',ocrText='';
     if(code){
       autoFound++;kind='barcode-photo';
     } else {
       // Step 2: Focused barcode-region digit OCR (crops center, digits-only whitelist)
       setStatus('stBulkProg',`Focused barcode OCR ${i+1}/${files.length}\u2026`);
-      code=await ocrBarcodeDigitsFromImage(f);
-      if(!code) code=await ocrBarcodeLineFromImage(f);  // also try digit-line crop
+      code=acceptDetectedCode(await ocrBarcodeDigitsFromImage(f));
+      if(!code) code=acceptDetectedCode(await ocrBarcodeLineFromImage(f));  // also try digit-line crop
       if(code){ ocrFound++;kind='barcode-ocr'; }
       else {
         // Step 3: General Tesseract OCR (catches model numbers too)
         setStatus('stBulkProg',`General OCR ${i+1}/${files.length}\u2026`);
         const ocr=await ocrIdentifierFromImage(f);
-        code=ocr.query||'';ocrText=ocr.raw||'';
+        code=acceptDetectedCode(ocr.query||'');ocrText=ocr.raw||'';
         if(code){ ocrFound++;kind='ocr-photo'; }
         else {
           // Step 4: Claude Vision API — most reliable for real warehouse photos
           setStatus('stBulkProg',`Asking Claude Vision ${i+1}/${files.length}\u2026`);
           const vis=await claudeVisionReadUPC(f);
-          code=vis.query||'';ocrText=vis.raw||'';
+          code=acceptDetectedCode(vis.query||'');ocrText=vis.raw||'';
           if(code){ ocrFound++;kind='vision-photo'; }
           else{ manual++;kind='sticker-photo'; }
         }
@@ -2293,36 +2313,23 @@ window.addEventListener('DOMContentLoaded',()=>{
   $('btnUploadBarcode').addEventListener('click',()=>$('inputBarcode').click());
   $('inputBarcode').addEventListener('change',async e=>{
     const f=e.target.files[0];if(!f)return;e.target.value='';
-    const goodCode=v=>{
-      if(!v)return false;
-      const s=String(v).trim();
-      if(/^\d+$/.test(s)){
-        if(s.length<8)return false;
-        if([8,12,13,14].includes(s.length)){
-          let sum=0,odd=true;
-          for(let j=s.length-2;j>=0;j--,odd=!odd)sum+=odd?Number(s[j])*3:Number(s[j]);
-          if((10-(sum%10))%10!==Number(s[s.length-1]))return false;
-        }
-        return true;
-      }
-      if(/^[A-Z0-9][A-Z0-9\-\/]{5,24}$/i.test(s)&&(s.match(/\d/g)||[]).length>=3)return true;
-      return false;
-    };
     setStatus('stIdentify','Reading barcode…');
-    let code=await scanFileForBarcode(f);
-    if(code&&goodCode(code)){$('lookupText').value=code;setStatus('stIdentify',`Detected: ${code}`,'ok');navigator.vibrate?.([40,20,40]);checkDuplicate(code);runLookup(code);return;}
+    let code=acceptDetectedCode(await scanFileForBarcode(f));
+    if(code){$('lookupText').value=code;setStatus('stIdentify',`Detected: ${code}`,'ok');navigator.vibrate?.([40,20,40]);checkDuplicate(code);runLookup(code);return;}
     setStatus('stIdentify','Trying barcode OCR…');
-    code=await ocrBarcodeDigitsFromImage(f);
-    if(code&&goodCode(code)){$('lookupText').value=code;setStatus('stIdentify',`Barcode OCR: ${code}`,'ok');checkDuplicate(code);runLookup(code);return;}
-    code=await ocrBarcodeLineFromImage(f);
-    if(code&&goodCode(code)){$('lookupText').value=code;setStatus('stIdentify',`Line OCR: ${code}`,'ok');checkDuplicate(code);runLookup(code);return;}
-    setStatus('stIdentify','Trying full image OCR…');
-    try{if(window.Tesseract){const out=await Tesseract.recognize(f,'eng',{logger:()=>{},tessedit_char_whitelist:'0123456789',preserve_interword_spaces:'1'});const raw=String(out?.data?.text||'').replace(/\s+/g,'');const hits=[...raw.matchAll(/\d{8,14}/g)].map(m=>m[0]).filter(goodCode).sort((a,b)=>b.length-a.length);if(hits[0]){$('lookupText').value=hits[0];setStatus('stIdentify',`Full OCR: ${hits[0]}`,'ok');checkDuplicate(hits[0]);runLookup(hits[0]);return;}}}catch(_){}
+    code=acceptDetectedCode(await ocrBarcodeDigitsFromImage(f));
+    if(code){$('lookupText').value=code;setStatus('stIdentify',`Barcode OCR: ${code}`,'ok');checkDuplicate(code);runLookup(code);return;}
+    code=acceptDetectedCode(await ocrBarcodeLineFromImage(f));
+    if(code){$('lookupText').value=code;setStatus('stIdentify',`Line OCR: ${code}`,'ok');checkDuplicate(code);runLookup(code);return;}
+    setStatus('stIdentify','Trying general OCR…');
+    const ocr=await ocrIdentifierFromImage(f);
+    code=acceptDetectedCode(ocr.query||'');
+    if(code){$('lookupText').value=code;setStatus('stIdentify',`OCR detected: ${code}`,'ok');checkDuplicate(code);runLookup(code);return;}
     setStatus('stIdentify','Asking Claude Vision…');
     const vis=await claudeVisionReadUPC(f);
-    code=vis.query||'';
-    if(code&&goodCode(code)){$('lookupText').value=code;setStatus('stIdentify',`Vision: ${code}`,'ok');checkDuplicate(code);runLookup(code);return;}
-    const fallback=vis.query||code||'';
+    code=acceptDetectedCode(vis.query||'');
+    if(code){$('lookupText').value=code;setStatus('stIdentify',`Vision detected: ${code}`,'ok');checkDuplicate(code);runLookup(code);return;}
+    const fallback=String(ocr.query||vis.query||'').trim();
     if(fallback){$('lookupText').value=fallback;setStatus('stIdentify',`Unverified: ${fallback} — check then press Look Up`,'warn');}
     else{setStatus('stIdentify','Could not read — type the UPC manually','warn');}
   });
@@ -2469,20 +2476,3 @@ window.addEventListener('DOMContentLoaded',()=>{
 </script>
 </body>
 </html>
-
-
-<script>
-function acceptDetectedCode(value){
-  const q = String(value || '').trim();
-  if(!q) return null;
-
-  // Reject obvious garbage like 9142061
-  if(/^\d+$/.test(q) && q.length < 8){
-    console.warn("Rejected partial OCR:", q);
-    return null;
-  }
-
-  return q;
-}
-</script>
-
