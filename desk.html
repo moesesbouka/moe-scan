@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>CrazyMoe Command Center</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0c10;--bg2:#13161c;--bg3:#1a1e26;--border:#2a2f3a;--border2:#363d4d;--text:#e8eaf0;--text2:#8b92a5;--text3:#555e72;--amber:#f59e0b;--amber2:#d97706;--green:#10b981;--red:#ef4444;--blue:#3b82f6;--r:8px;--r2:12px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column}
+.topbar{height:48px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:16px;flex-shrink:0;position:sticky;top:0;z-index:100}
+.logo{font-size:15px;font-weight:600}.logo span{color:var(--amber)}
+.conn-dot{width:7px;height:7px;border-radius:50%;background:var(--text3)}.conn-dot.ok{background:var(--green)}.conn-dot.err{background:var(--red)}
+.conn-label{font-size:12px;color:var(--text2)}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.stat-chip{font-size:12px;color:var(--text2);background:var(--bg3);padding:3px 10px;border-radius:20px;border:1px solid var(--border)}.stat-chip b{color:var(--amber);font-weight:600}
+.app-body{display:flex;flex:1;overflow:hidden}
+.sidebar{width:196px;background:var(--bg2);border-right:1px solid var(--border);padding:12px 8px;display:flex;flex-direction:column;gap:2px;flex-shrink:0}
+.nav{padding:9px 12px;border-radius:var(--r);font-size:13px;cursor:pointer;color:var(--text2);display:flex;align-items:center;gap:9px;transition:all .15s;user-select:none}
+.nav:hover{background:var(--bg3);color:var(--text)}.nav.active{background:var(--bg3);color:var(--text);font-weight:500}
+.nav-badge{margin-left:auto;background:var(--amber);color:#000;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:18px;text-align:center}
+.nav-sep{height:1px;background:var(--border);margin:6px 4px}
+.main{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+.page{display:none;flex-direction:column;gap:16px}.page.active{display:flex}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:16px}
+.card-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.card-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text2)}
+.btn{padding:7px 14px;border-radius:var(--r);font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--border2);background:var(--bg3);color:var(--text);transition:all .15s;white-space:nowrap}
+.btn:hover{opacity:.85}.btn:active{opacity:.7}.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-amber{background:var(--amber);border-color:var(--amber);color:#000}
+.btn-green{background:var(--green);border-color:var(--green);color:#fff}
+.btn-sm{padding:4px 9px;font-size:11px}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.metric{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px 16px}
+.metric-label{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+.metric-val{font-size:24px;font-weight:600}.metric-val.amber{color:var(--amber)}.metric-val.green{color:var(--green)}
+.qi{display:grid;grid-template-columns:44px 1fr auto;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)}
+.qi:last-child{border-bottom:none}
+.qi-thumb{width:44px;height:44px;border-radius:6px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;overflow:hidden}
+.qi-thumb img{width:100%;height:100%;object-fit:cover;border-radius:6px}
+.qi-info{min-width:0}
+.qi-title{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px}
+.qi-meta{font-size:11px;color:var(--text2)}.qi-price{font-weight:600;color:var(--amber)}
+.qi-actions{display:flex;gap:6px;align-items:center;flex-shrink:0}
+.pill{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;white-space:nowrap}
+.pill-draft{background:rgba(139,146,165,.15);color:var(--text2)}
+.pill-ready{background:rgba(245,158,11,.15);color:var(--amber)}
+.pill-posted{background:rgba(16,185,129,.15);color:var(--green)}
+.pill-posting{background:rgba(59,130,246,.15);color:var(--blue)}
+.f{display:flex;flex-direction:column;gap:4px}
+.fl{font-size:11px;color:var(--text2)}
+input.inp,textarea.inp,select.inp{width:100%;padding:8px 11px;border:1px solid var(--border2);border-radius:var(--r);background:var(--bg3);color:var(--text);font-size:13px;outline:none;font-family:inherit;transition:border .15s}
+input.inp:focus,textarea.inp:focus,select.inp:focus{border-color:var(--amber)}
+textarea.inp{resize:vertical;line-height:1.5}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.empty{text-align:center;padding:40px 20px;color:var(--text3);font-size:13px}
+.sb{padding:7px 12px;border-radius:var(--r);font-size:12px;display:none;margin-top:4px}
+.sb.ok{display:block;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);color:var(--green)}
+.sb.err{display:block;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:var(--red)}
+.sb.info{display:block;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);color:var(--blue)}
+.drop-zone{border:2px dashed var(--border2);border-radius:var(--r2);padding:36px 20px;text-align:center;cursor:pointer;transition:all .15s;color:var(--text2)}
+.drop-zone:hover,.drop-zone.drag-over{border-color:var(--amber);background:rgba(245,158,11,.04)}
+.prog-bar{height:5px;background:var(--bg3);border-radius:3px;overflow:hidden}
+.prog-fill{height:100%;background:var(--amber);border-radius:3px;transition:width .3s}
+.inv-table{width:100%;border-collapse:collapse}
+.inv-table th{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);font-weight:500}
+.inv-table td{padding:9px 10px;font-size:12px;border-bottom:1px solid var(--border)}
+.inv-table tr:last-child td{border-bottom:none}
+.inv-table tbody tr:hover td{background:var(--bg3)}
+.edit-panel{background:var(--bg2);border:1px solid var(--amber);border-radius:var(--r2);padding:16px;display:none;flex-direction:column;gap:12px}
+.edit-panel.open{display:flex}
+.scan-row{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;border-bottom:1px solid var(--border)}
+.scan-row:last-child{border-bottom:none}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo"><span>Crazy</span>Moe Command Center</div>
+  <div style="display:flex;align-items:center;gap:6px">
+    <div class="conn-dot" id="connDot"></div>
+    <span class="conn-label" id="connLabel">Not connected</span>
+  </div>
+  <div class="topbar-right">
+    <div class="stat-chip">Queue: <b id="stat-queue">–</b></div>
+    <div class="stat-chip">Posted today: <b id="stat-today">–</b></div>
+    <button class="btn btn-sm" onclick="refreshAll()">↻ Refresh</button>
+  </div>
+</div>
+<div class="app-body">
+  <div class="sidebar">
+    <div class="nav active" onclick="showPage('queue',this)">📋 Queue <span class="nav-badge" id="nb-queue">–</span></div>
+    <div class="nav" onclick="showPage('scan',this)">📷 Scan / Import</div>
+    <div class="nav" onclick="showPage('inventory',this)">📦 Inventory</div>
+    <div class="nav-sep"></div>
+    <div class="nav" onclick="showPage('settings',this)">⚙️ Settings</div>
+  </div>
+  <div class="main">
+
+    <!-- QUEUE -->
+    <div class="page active" id="page-queue">
+      <div class="metrics">
+        <div class="metric"><div class="metric-label">In Queue</div><div class="metric-val amber" id="m-queue">–</div></div>
+        <div class="metric"><div class="metric-label">Posted Today</div><div class="metric-val green" id="m-today">–</div></div>
+        <div class="metric"><div class="metric-label">Total Listed</div><div class="metric-val" id="m-total">–</div></div>
+        <div class="metric"><div class="metric-label">Drafts</div><div class="metric-val" id="m-draft">–</div></div>
+      </div>
+      <div id="sq" class="sb"></div>
+      <div class="card">
+        <div class="card-hd">
+          <span class="card-title">Ready to post</span>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-sm" onclick="loadQueue()">Reload</button>
+            <button class="btn btn-amber btn-sm" onclick="postAllToFB()">🚀 Post all to FB</button>
+          </div>
+        </div>
+        <div id="queue-list"><div class="empty">Loading…</div></div>
+      </div>
+      <div class="edit-panel" id="edit-panel">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:13px;font-weight:500">Edit listing</span>
+          <button class="btn btn-sm" onclick="closeEdit()">✕ Close</button>
+        </div>
+        <div class="f"><div class="fl">Title</div><input class="inp" id="ed-title" placeholder="Product title"></div>
+        <div class="two-col">
+          <div class="f"><div class="fl">Price ($)</div><input class="inp" id="ed-price" type="number"></div>
+          <div class="f"><div class="fl">Condition</div>
+            <select class="inp" id="ed-cond">
+              <option>New</option><option>Used – Like New</option><option selected>Used – Good</option><option>Used – Fair</option>
+            </select>
+          </div>
+        </div>
+        <div class="f"><div class="fl">Description</div><textarea class="inp" id="ed-desc" rows="4"></textarea></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn" onclick="closeEdit()">Cancel</button>
+          <button class="btn btn-green" id="btn-save-edit" onclick="saveEdit()">Save &amp; mark ready</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCAN -->
+    <div class="page" id="page-scan">
+      <div class="card">
+        <div class="card-hd"><span class="card-title">Batch barcode photos → UPCs</span></div>
+        <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()"
+          ondragover="event.preventDefault();this.classList.add('drag-over')"
+          ondragleave="this.classList.remove('drag-over')"
+          ondrop="handleDrop(event)">
+          <div style="font-size:30px;margin-bottom:8px">📁</div>
+          <div style="font-size:14px;font-weight:500;color:var(--text);margin-bottom:4px">Drop barcode photos here or click to select</div>
+          <div style="font-size:12px">Uses Claude Vision · ~1s per image · auto-adds to queue</div>
+          <input type="file" id="file-input" multiple accept="image/*" style="display:none" onchange="handleFiles(this.files)">
+        </div>
+        <div id="scan-sb" class="sb"></div>
+        <div id="scan-prog-wrap" style="display:none;margin-top:12px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:6px">
+            <span id="scan-prog-lbl">Processing…</span><span id="scan-prog-cnt">0 / 0</span>
+          </div>
+          <div class="prog-bar"><div class="prog-fill" id="scan-prog" style="width:0%"></div></div>
+          <div id="scan-res" style="margin-top:10px;max-height:180px;overflow-y:auto"></div>
+        </div>
+        <div id="scan-done-wrap" style="display:none;margin-top:12px">
+          <div style="font-size:13px;font-weight:500;margin-bottom:8px">Scan complete — UPCs below</div>
+          <textarea class="inp" id="upc-box" rows="5" style="font-family:monospace;font-size:12px"></textarea>
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+            <button class="btn" onclick="clearScan()">Clear</button>
+            <button class="btn btn-amber" onclick="lookupFromScan()">Look up all &amp; add to queue →</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><span class="card-title">Paste UPCs manually</span></div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <textarea class="inp" id="manual-upcs" rows="5" placeholder="Paste UPCs one per line from upcs_only.txt…" style="font-family:monospace;font-size:12px"></textarea>
+          <div id="manual-sb" class="sb"></div>
+          <div style="display:flex;justify-content:flex-end">
+            <button class="btn btn-amber" onclick="lookupManualUPCs()">Look up &amp; add to queue →</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- INVENTORY -->
+    <div class="page" id="page-inventory">
+      <div class="metrics">
+        <div class="metric"><div class="metric-label">Total</div><div class="metric-val" id="inv-total">–</div></div>
+        <div class="metric"><div class="metric-label">Posted</div><div class="metric-val green" id="inv-posted">–</div></div>
+        <div class="metric"><div class="metric-label">Ready</div><div class="metric-val amber" id="inv-ready">–</div></div>
+        <div class="metric"><div class="metric-label">Draft</div><div class="metric-val" id="inv-draft">–</div></div>
+      </div>
+      <div class="card">
+        <div class="card-hd">
+          <span class="card-title">All inventory</span>
+          <div style="display:flex;gap:8px">
+            <input class="inp" id="inv-search" placeholder="Search…" style="width:180px;padding:5px 10px" oninput="filterInv()">
+            <button class="btn btn-sm" onclick="loadInventory()">Reload</button>
+          </div>
+        </div>
+        <div id="inv-sb" class="sb" style="margin-bottom:10px"></div>
+        <div style="overflow-x:auto">
+          <table class="inv-table" id="inv-table">
+            <thead><tr><th style="width:40px"></th><th>Title</th><th>UPC</th><th>Price</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+            <tbody id="inv-body"><tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">Click Reload to load inventory</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div class="page" id="page-settings">
+      <div class="card">
+        <div class="card-hd"><span class="card-title">Supabase connection</span></div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div class="f"><div class="fl">Supabase URL</div><input class="inp" id="cfg-url" placeholder="https://xxxxx.supabase.co"></div>
+          <div class="f"><div class="fl">Supabase anon key</div><input class="inp" id="cfg-key" type="password" placeholder="eyJhbG…"></div>
+          <div class="f"><div class="fl">Table name</div><input class="inp" id="cfg-table" placeholder="active_listings"></div>
+          <div id="cfg-sb" class="sb"></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn" onclick="testConn()">Test connection</button>
+            <button class="btn btn-amber" onclick="saveSettings()">Save settings</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><span class="card-title">Defaults</span></div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div class="two-col">
+            <div class="f"><div class="fl">City</div><input class="inp" id="cfg-city" placeholder="Buffalo, NY"></div>
+            <div class="f"><div class="fl">Store name</div><input class="inp" id="cfg-store" placeholder="CrazyMoe"></div>
+          </div>
+          <div class="f"><div class="fl">Scanner PWA URL</div><input class="inp" id="cfg-pwa" placeholder="https://genuine-lebkuchen-21e837.netlify.app"></div>
+          <button class="btn btn-amber" style="align-self:flex-end" onclick="saveSettings()">Save</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><span class="card-title">Quick links</span></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" onclick="window.open(getCfg('pwa')||'https://genuine-lebkuchen-21e837.netlify.app','_blank')">📱 Open Scanner PWA</button>
+          <button class="btn" onclick="window.open('https://www.facebook.com/marketplace/you/selling','_blank')">📘 FB My Listings</button>
+          <button class="btn" onclick="window.open('https://app.netlify.com','_blank')">🌐 Netlify</button>
+          <button class="btn" onclick="window.open('https://app.supabase.com','_blank')">🗄 Supabase</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+let queueItems=[],invItems=[],editingId=null,scanUPCs=[];
+const getCfg=k=>localStorage.getItem('cm_desk_'+k)||'';
+const setCfg=(k,v)=>localStorage.setItem('cm_desk_'+k,v);
+const esc=s=>String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function ss(id,msg,type){const el=document.getElementById(id);if(!el)return;el.textContent=msg;el.className='sb '+type;}
+function cs(id){const el=document.getElementById(id);if(el){el.style.display='none';el.textContent='';el.className='sb';}}
+
+function loadSettings(){
+  document.getElementById('cfg-url').value=getCfg('url')||localStorage.getItem('cmScannerUrl')||'';
+  document.getElementById('cfg-key').value=getCfg('key')||localStorage.getItem('cmScannerKey')||'';
+  document.getElementById('cfg-table').value=getCfg('table')||'active_listings';
+  document.getElementById('cfg-city').value=getCfg('city')||'Buffalo, NY';
+  document.getElementById('cfg-store').value=getCfg('store')||'CrazyMoe';
+  document.getElementById('cfg-pwa').value=getCfg('pwa')||'https://genuine-lebkuchen-21e837.netlify.app';
+}
+function saveSettings(){
+  setCfg('url',document.getElementById('cfg-url').value.trim());
+  setCfg('key',document.getElementById('cfg-key').value.trim());
+  setCfg('table',document.getElementById('cfg-table').value.trim()||'active_listings');
+  setCfg('city',document.getElementById('cfg-city').value.trim());
+  setCfg('store',document.getElementById('cfg-store').value.trim());
+  setCfg('pwa',document.getElementById('cfg-pwa').value.trim());
+  ss('cfg-sb','✓ Saved','ok');refreshAll();
+}
+const sbH=(json=true)=>{const h={apikey:getCfg('key'),Authorization:'Bearer '+getCfg('key')};if(json)h['Content-Type']='application/json';return h;};
+const sbBase=()=>(getCfg('url')||'').replace(/\/$/,'');
+const sbTable=()=>getCfg('table')||'active_listings';
+const isConf=()=>!!(getCfg('url')&&getCfg('key'));
+
+async function checkConn(){
+  if(!isConf()){setConn(false,'Configure in Settings');return false;}
+  try{const r=await fetch(`${sbBase()}/rest/v1/${sbTable()}?limit=1`,{headers:sbH(false)});if(r.ok){setConn(true,'Connected');return true;}setConn(false,'Error '+r.status);return false;}
+  catch(e){setConn(false,'Cannot reach Supabase');return false;}
+}
+function setConn(ok,msg){document.getElementById('connDot').className='conn-dot'+(ok?' ok':' err');document.getElementById('connLabel').textContent=msg;}
+async function testConn(){ss('cfg-sb','Testing…','info');const ok=await checkConn();if(ok)ss('cfg-sb','✓ Connected','ok');else ss('cfg-sb','✗ Connection failed — check URL and key','err');}
+
+function showPage(id,el){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav').forEach(n=>n.classList.remove('active'));
+  document.getElementById('page-'+id).classList.add('active');
+  if(el)el.classList.add('active');
+  if(id==='queue')loadQueue();
+  if(id==='inventory')loadInventory();
+  if(id==='settings')loadSettings();
+}
+
+async function loadQueue(){
+  if(!isConf()){renderQueue([]);ss('sq','Configure Supabase in Settings first','err');return;}
+  try{
+    const r=await fetch(`${sbBase()}/rest/v1/${sbTable()}?status=in.(ready_to_post,draft)&order=created_at_client.desc&limit=100`,{headers:sbH(false)});
+    if(!r.ok)throw new Error('Supabase '+r.status);
+    queueItems=await r.json();renderQueue(queueItems);updateMetrics();cs('sq');
+  }catch(e){ss('sq','Failed to load: '+e.message,'err');renderQueue([]);}
+}
+function renderQueue(items){
+  const list=document.getElementById('queue-list');
+  const ready=items.filter(i=>i.status==='ready_to_post');
+  document.getElementById('nb-queue').textContent=ready.length||'0';
+  if(!items.length){list.innerHTML='<div class="empty">Queue is empty. Add items via Scan / Import tab.</div>';return;}
+  list.innerHTML=[...ready,...items.filter(i=>i.status==='draft')].map(item=>{
+    const pill=item.status==='ready_to_post'?'<span class="pill pill-ready">Ready</span>':'<span class="pill pill-draft">Draft</span>';
+    const postBtn=item.status==='ready_to_post'?`<button class="btn btn-green btn-sm" onclick="postOne('${item.id}',this)">Post to FB</button>`:'';
+    const photo=(item.photos&&item.photos[0])?`<img src="${esc(item.photos[0])}" loading="lazy" onerror="this.parentElement.innerHTML='📦'">`:'📦';
+    return `<div class="qi" id="qi-${item.id}">
+      <div class="qi-thumb">${photo}</div>
+      <div class="qi-info">
+        <div class="qi-title" title="${esc(item.title)}">${esc(item.title||'Untitled')}</div>
+        <div class="qi-meta"><span class="qi-price">$${item.price||0}</span> · ${esc(item.condition||'')}${item.upc?' · <span style="font-family:monospace;font-size:10px">'+esc(item.upc)+'</span>':''}</div>
+      </div>
+      <div class="qi-actions">${pill}<button class="btn btn-sm" onclick="editItem('${item.id}')">Edit</button>${postBtn}</div>
+    </div>`;
+  }).join('');
+}
+function editItem(id){
+  const item=queueItems.find(i=>i.id===id);if(!item)return;
+  editingId=id;
+  document.getElementById('ed-title').value=item.title||'';
+  document.getElementById('ed-price').value=item.price||'';
+  document.getElementById('ed-cond').value=item.condition||'Used – Good';
+  document.getElementById('ed-desc').value=item.description||'';
+  const p=document.getElementById('edit-panel');p.classList.add('open');p.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function closeEdit(){document.getElementById('edit-panel').classList.remove('open');editingId=null;}
+async function saveEdit(){
+  if(!editingId)return;
+  const btn=document.getElementById('btn-save-edit');btn.disabled=true;btn.textContent='Saving…';
+  const patch={title:document.getElementById('ed-title').value.trim(),price:parseFloat(document.getElementById('ed-price').value)||0,condition:document.getElementById('ed-cond').value,description:document.getElementById('ed-desc').value.trim(),status:'ready_to_post'};
+  try{
+    const r=await fetch(`${sbBase()}/rest/v1/${sbTable()}?id=eq.${editingId}`,{method:'PATCH',headers:{...sbH(),Prefer:'return=minimal'},body:JSON.stringify(patch)});
+    if(!r.ok)throw new Error(r.status);
+    closeEdit();await loadQueue();ss('sq','✓ Saved and marked ready','ok');
+  }catch(e){ss('sq','Save failed: '+e.message,'err');}
+  finally{btn.disabled=false;btn.textContent='Save & mark ready';}
+}
+function postOne(id,btn){
+  const item=queueItems.find(i=>i.id===id);if(!item)return;
+  btn.disabled=true;btn.textContent='…';
+  try{localStorage.setItem('crazymoe_fb_pending',JSON.stringify(buildPayload(item)));}catch(e){}
+  const row=document.getElementById('qi-'+id);
+  if(row){const p=row.querySelector('.pill');if(p){p.textContent='Posting';p.className='pill pill-posting';}}
+  window.open('https://www.facebook.com/marketplace/create/item','_blank');
+  setTimeout(async()=>{
+    try{
+      await fetch(`${sbBase()}/rest/v1/${sbTable()}?id=eq.${id}`,{method:'PATCH',headers:{...sbH(),Prefer:'return=minimal'},body:JSON.stringify({status:'posted',posted_at:new Date().toISOString()})});
+      const row2=document.getElementById('qi-'+id);
+      if(row2){const p=row2.querySelector('.pill');if(p){p.textContent='Posted';p.className='pill pill-posted';}}
+      btn.textContent='✓';btn.className='btn btn-sm';updateMetrics();
+    }catch(e){btn.disabled=false;btn.textContent='Post to FB';}
+  },4000);
+}
+async function postAllToFB(){
+  const ready=queueItems.filter(i=>i.status==='ready_to_post');
+  if(!ready.length){ss('sq','No ready items','info');return;}
+  if(!confirm(`Open ${ready.length} Facebook tabs and auto-fill each listing?`))return;
+  for(let i=0;i<ready.length;i++){
+    try{localStorage.setItem('crazymoe_fb_pending',JSON.stringify(buildPayload(ready[i])));}catch(e){}
+    window.open('https://www.facebook.com/marketplace/create/item','_blank');
+    await sleep(1500);
+  }
+  ss('sq',`Opened ${ready.length} FB tabs — extension fills each one as it loads`,'ok');
+}
+function buildPayload(item){return{title:item.title||'',price:String(item.price||''),description:item.description||'',condition:item.condition||'Used – Good',category:item.category||'',images:item.photos||[],upc:item.upc||'',source_url:item.source_url||''};}
+
+async function updateMetrics(){
+  try{
+    const r=await fetch(`${sbBase()}/rest/v1/${sbTable()}?select=status,posted_at`,{headers:sbH(false)});
+    if(!r.ok)return;const rows=await r.json();
+    const today=new Date().toDateString();
+    const ready=rows.filter(r=>r.status==='ready_to_post').length;
+    const posted=rows.filter(r=>r.status==='posted').length;
+    const postedToday=rows.filter(r=>r.status==='posted'&&r.posted_at&&new Date(r.posted_at).toDateString()===today).length;
+    const draft=rows.filter(r=>r.status==='draft').length;
+    document.getElementById('m-queue').textContent=ready;
+    document.getElementById('m-today').textContent=postedToday;
+    document.getElementById('m-total').textContent=rows.length;
+    document.getElementById('m-draft').textContent=draft;
+    document.getElementById('stat-queue').textContent=ready;
+    document.getElementById('stat-today').textContent=postedToday;
+    document.getElementById('nb-queue').textContent=ready;
+  }catch(e){}
+}
+
+async function loadInventory(){
+  ss('inv-sb','Loading…','info');
+  try{
+    const r=await fetch(`${sbBase()}/rest/v1/${sbTable()}?order=created_at_client.desc&limit=200`,{headers:sbH(false)});
+    if(!r.ok)throw new Error('Error '+r.status);
+    invItems=await r.json();renderInv(invItems);cs('inv-sb');
+    document.getElementById('inv-total').textContent=invItems.length;
+    document.getElementById('inv-posted').textContent=invItems.filter(i=>i.status==='posted').length;
+    document.getElementById('inv-ready').textContent=invItems.filter(i=>i.status==='ready_to_post').length;
+    document.getElementById('inv-draft').textContent=invItems.filter(i=>i.status==='draft').length;
+  }catch(e){ss('inv-sb','Failed: '+e.message,'err');}
+}
+function filterInv(){const q=(document.getElementById('inv-search').value||'').toLowerCase();renderInv(q?invItems.filter(i=>(i.title||'').toLowerCase().includes(q)||(i.upc||'').includes(q)):invItems);}
+function renderInv(items){
+  const body=document.getElementById('inv-body');
+  if(!items.length){body.innerHTML='<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text3)">No items</td></tr>';return;}
+  body.innerHTML=items.map(item=>{
+    const pc={posted:'pill-posted',ready_to_post:'pill-ready',draft:'pill-draft'}[item.status]||'pill-draft';
+    const pt={posted:'Posted',ready_to_post:'Ready',draft:'Draft'}[item.status]||item.status;
+    const date=item.created_at_client?new Date(item.created_at_client).toLocaleDateString():'–';
+    return `<tr>
+      <td><div style="width:32px;height:32px;border-radius:4px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:16px;overflow:hidden">${item.photos&&item.photos[0]?`<img src="${esc(item.photos[0])}" style="width:32px;height:32px;object-fit:cover;border-radius:4px" loading="lazy" onerror="this.style.display='none'">`:'📦'}</div></td>
+      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(item.title)}">${esc(item.title||'Untitled')}</td>
+      <td style="font-family:monospace;font-size:11px;color:var(--text2)">${esc(item.upc||'–')}</td>
+      <td style="font-weight:600;color:var(--amber)">$${item.price||0}</td>
+      <td><span class="pill ${pc}">${pt}</span></td>
+      <td style="color:var(--text2)">${date}</td>
+      <td><div style="display:flex;gap:4px">
+        <button class="btn btn-sm" onclick="editFromInv('${item.id}')">Edit</button>
+        ${item.status==='ready_to_post'?`<button class="btn btn-green btn-sm" onclick="postFromInv('${item.id}')">Post</button>`:''}
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+function editFromInv(id){const item=invItems.find(i=>i.id===id);if(!item){return;}queueItems=[...queueItems.filter(i=>i.id!==id),item];showPage('queue',document.querySelectorAll('.nav')[0]);setTimeout(()=>editItem(id),100);}
+function postFromInv(id){const item=invItems.find(i=>i.id===id);if(!item)return;try{localStorage.setItem('crazymoe_fb_pending',JSON.stringify(buildPayload(item)));}catch(e){}window.open('https://www.facebook.com/marketplace/create/item','_blank');setTimeout(async()=>{try{await fetch(`${sbBase()}/rest/v1/${sbTable()}?id=eq.${id}`,{method:'PATCH',headers:{...sbH(),Prefer:'return=minimal'},body:JSON.stringify({status:'posted',posted_at:new Date().toISOString()})});loadInventory();}catch(e){}},4000);}
+
+function handleDrop(e){e.preventDefault();document.getElementById('drop-zone').classList.remove('drag-over');handleFiles(e.dataTransfer.files);}
+async function handleFiles(fileList){
+  const files=[...fileList].filter(f=>f.type.startsWith('image/'));
+  if(!files.length)return;
+  const pwaUrl=getCfg('pwa')||'https://genuine-lebkuchen-21e837.netlify.app';
+  document.getElementById('scan-prog-wrap').style.display='block';
+  document.getElementById('scan-done-wrap').style.display='none';
+  document.getElementById('scan-res').innerHTML='';
+  scanUPCs=[];let done=0;
+  const upd=()=>{const pct=Math.round((done/files.length)*100);document.getElementById('scan-prog').style.width=pct+'%';document.getElementById('scan-prog-cnt').textContent=`${done} / ${files.length}`;document.getElementById('scan-prog-lbl').textContent=`Processing ${done} of ${files.length}…`;};
+  upd();
+  for(let i=0;i<files.length;i+=4){
+    const batch=files.slice(i,i+4);
+    await Promise.all(batch.map(async f=>{
+      const code=await visionRead(f,pwaUrl);done++;upd();
+      const row=document.createElement('div');row.className='scan-row';
+      if(code){row.innerHTML=`<span style="color:var(--green)">✓</span><span style="flex:1;color:var(--text2);font-size:11px">${esc(f.name)}</span><span style="font-family:monospace;font-weight:600">${esc(code)}</span>`;scanUPCs.push(code);}
+      else{row.innerHTML=`<span style="color:var(--red)">✗</span><span style="flex:1;color:var(--text3);font-size:11px">${esc(f.name)}</span><span style="color:var(--text3)">not found</span>`;}
+      document.getElementById('scan-res').appendChild(row);
+    }));
+  }
+  document.getElementById('scan-prog-lbl').textContent=`Done — ${scanUPCs.length} of ${files.length} read`;
+  if(scanUPCs.length){document.getElementById('upc-box').value=scanUPCs.join('\n');document.getElementById('scan-done-wrap').style.display='block';}
+  ss('scan-sb',`${scanUPCs.length} UPCs found, ${files.length-scanUPCs.length} not readable`,'ok');
+}
+async function visionRead(file,pwaUrl){
+  try{
+    const resized=await new Promise(res=>{const img=new Image();const url=URL.createObjectURL(file);img.onload=()=>{URL.revokeObjectURL(url);const sc=Math.min(1,1000/Math.max(img.naturalWidth||1000,img.naturalHeight||1000));const cv=document.createElement('canvas');cv.width=Math.round(img.naturalWidth*sc);cv.height=Math.round(img.naturalHeight*sc);cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);cv.toBlob(b=>res(b),'image/jpeg',.85);};img.onerror=()=>{URL.revokeObjectURL(url);res(file);};img.src=url;});
+    const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(',')[1]);r.onerror=rej;r.readAsDataURL(resized);});
+    const resp=await fetch(`${pwaUrl}/.netlify/functions/vision-ocr`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:b64,mediaType:'image/jpeg'})});
+    if(!resp.ok)return'';const data=await resp.json();return data.query||'';
+  }catch(e){return'';}
+}
+async function lookupFromScan(){await lookupList(document.getElementById('upc-box').value.trim().split('\n').filter(Boolean),'scan-sb');}
+async function lookupManualUPCs(){await lookupList(document.getElementById('manual-upcs').value.trim().split('\n').filter(Boolean),'manual-sb');}
+async function lookupList(upcs,sbId){
+  if(!upcs.length){ss(sbId,'Enter at least one UPC','err');return;}
+  if(!isConf()){ss(sbId,'Configure Supabase in Settings first','err');return;}
+  ss(sbId,`Looking up ${upcs.length} UPCs…`,'info');
+  const pwaUrl=getCfg('pwa')||'https://genuine-lebkuchen-21e837.netlify.app';
+  let added=0,failed=0;
+  for(const upc of upcs.slice(0,50)){
+    try{
+      const r=await fetch(`${pwaUrl}/.netlify/functions/lookup`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:upc})});
+      if(!r.ok){failed++;continue;}
+      const data=await r.json();const best=data.results&&data.results[0];
+      if(!best){failed++;continue;}
+      const payload={title:best.title||upc,price:parseFloat(best.price||0)||0,condition:'Used – Good',description:best.description||'',upc,product_brand:best.brand||'',product_model:best.model||'',source:best.source||'',source_url:best.sourceUrl||'',photos:[],status:'ready_to_post',created_at_client:new Date().toISOString()};
+      const s=await fetch(`${sbBase()}/rest/v1/${sbTable()}`,{method:'POST',headers:{...sbH(),Prefer:'return=minimal'},body:JSON.stringify(payload)});
+      if(s.ok||s.status===201)added++;else failed++;
+    }catch(e){failed++;}
+  }
+  ss(sbId,`✓ Added ${added} to queue. ${failed} failed or not found.`,'ok');
+  if(added>0){await loadQueue();}
+}
+function clearScan(){document.getElementById('scan-prog-wrap').style.display='none';document.getElementById('scan-done-wrap').style.display='none';document.getElementById('scan-res').innerHTML='';document.getElementById('upc-box').value='';cs('scan-sb');scanUPCs=[];}
+async function refreshAll(){await checkConn();await updateMetrics();const ap=document.querySelector('.page.active');if(ap&&ap.id==='page-queue')await loadQueue();if(ap&&ap.id==='page-inventory')await loadInventory();}
+window.addEventListener('DOMContentLoaded',async()=>{loadSettings();await checkConn();await loadQueue();await updateMetrics();});
+</script>
+</body>
+</html>
